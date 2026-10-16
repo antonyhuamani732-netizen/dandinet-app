@@ -120,7 +120,7 @@ td:last-child, th:last-child { text-align: right; }
 table.resumen { background: #fff; border-radius: var(--radio); overflow: hidden; }
 
 /* navegación inferior */
-nav.inferior { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+nav.inferior { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(5, 1fr);
   background: #fff; border-top: 1px solid var(--linea); padding-bottom: env(safe-area-inset-bottom); z-index: 5; }
 nav.inferior a { display: flex; flex-direction: column; align-items: center; padding: 8px 0; font-size: 12px; color: var(--suave); text-decoration: none; }
 nav.inferior a span { font-size: 20px; }
@@ -134,3 +134,8 @@ nav.inferior a.activo { color: var(--azul); font-weight: 700; }
 .foto input { padding: 10px; background: var(--fondo); }
 .foto-prev { display: block; max-width: 160px; margin: 8px 0; border-radius: 8px; border: 1px solid var(--linea); }
 #listaPagos li { cursor: pointer; }
+
+.mini.sel { background: var(--azul); color: #fff; border-color: var(--azul); }
+.fila { display: flex; gap: 8px; align-items: center; } .fila input { flex: 1; }
+.pp { display: flex; justify-content: space-between; gap: 10px; padding: 12px; width: 100%; }
+.pp .der { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
