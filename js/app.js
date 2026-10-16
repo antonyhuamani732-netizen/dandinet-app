@@ -207,9 +207,14 @@ async function vCliente(id) {
           ${s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido' ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
         </div>`).join('') || '<p class="vacio">Sin servicios</p>'}
       <h3>Últimos pagos</h3>
-      <ul class="lista compacta">${pagos.map((p) => `<li><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(p.PERIODOS)}</small></div>
-        <div class="der">${soles(p.MONTO)}${p.ESTADO === 'Anulado' ? '<small class="error">ANULADO</small>' : ''}</div></li>`).join('') || '<li class="vacio">Sin pagos recientes</li>'}</ul>
+      <ul class="lista compacta" id="listaPagos">${pagos.map((p) => `<li data-nro="${esc(p.N_RECIBO)}"><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(p.PERIODOS)}</small></div>
+        <div class="der">${soles(p.MONTO)}${p.ESTADO === 'Anulado' ? '<small class="error">ANULADO</small>' : ''}<small>📄 PDF</small></div></li>`).join('') || '<li class="vacio">Sin pagos recientes</li>'}</ul>
+      <div id="zonaPdf"></div>
     </section>`;
+  $('#listaPagos').addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-nro]');
+    if (li) { prepararPdf(li.dataset.nro, $('#zonaPdf')); $('#zonaPdf').scrollIntoView({ behavior: 'smooth' }); }
+  });
 }
 
 // ---- COBRAR ------------------------------------------------------------------------
@@ -248,6 +253,9 @@ async function vCobrar(id) {
       <p id="avisoMonto" class="aviso" hidden></p>
       <label>Método<select id="metodo">${metodosPago().map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
       <label id="opWrap">N° de operación<input id="operacion" inputmode="numeric" autocomplete="off"></label>
+      <label id="fotoWrap" class="foto">📷 Foto del voucher (opcional)
+        <input id="foto" type="file" accept="image/*" capture="environment"></label>
+      <img id="fotoPrev" class="foto-prev" hidden alt="Voucher">
       <label>Observación<input id="obs" maxlength="200" placeholder="Opcional (ej.: pagó solo el cable)"></label>
       <button class="btn grande verde" id="btnCobrar">REGISTRAR COBRO</button>
       <a class="btn secundario" href="#/cliente/${esc(id)}">Cancelar</a>
@@ -275,7 +283,16 @@ async function vCobrar(id) {
   $('#selTodo').onclick = () => { visibles().forEach((x) => { x.checked = true; }); recalc(); };
   $('#selNada').onclick = () => { cajas().forEach((x) => { x.checked = false; }); recalc(); };
   $('#verFut').onchange = (e) => { futuros().forEach((x) => { x.closest('label').hidden = !e.target.checked; if (!e.target.checked) x.checked = false; }); recalc(); };
-  $('#metodo').onchange = () => { $('#opWrap').style.display = $('#metodo').value === 'Efectivo' ? 'none' : ''; };
+  $('#metodo').onchange = () => {
+    const ef = $('#metodo').value === 'Efectivo';
+    $('#opWrap').style.display = ef ? 'none' : ''; $('#fotoWrap').style.display = ef ? 'none' : '';
+  };
+  let fotoData = '';
+  $('#foto').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try { fotoData = await comprimirImagen(f); $('#fotoPrev').src = fotoData; $('#fotoPrev').hidden = false; }
+    catch (err) { aviso('No se pudo leer la foto.', 'error'); }
+  };
   $('#metodo').onchange();
   recalc();
 
@@ -296,6 +313,7 @@ async function vCobrar(id) {
     const op = {
       tipo: 'COBRO', idCliente: id, cargos: cargosSel.map((k) => k.ID_CARGO), monto, metodo,
       operacion: $('#operacion').value.trim(), obs: $('#obs').value.trim(), fechaPago: hoyISO(),
+      foto: metodo === 'Efectivo' ? '' : fotoData,
       reciboProvisional: await siguienteProvisional(PERFIL.iniciales),
       // copia para mostrar el comprobante aunque no haya señal
       vista: { cliente: c.NOMBRES, doc: c.DNI_RUC, zona: c.ZONA, telefono: c.TELEFONO, usuario: PERFIL.nombre,
@@ -338,10 +356,49 @@ async function vRecibo(idSol) {
       <p class="sub">${esc(op.metodo)}${op.operacion ? ' · Op. ' + esc(op.operacion) : ''}</p>
       ${res.mensaje && oficial ? `<p class="sub">${esc(res.mensaje)}</p>` : ''}
       <p class="pie">Recibo interno de control de pagos. No es comprobante SUNAT.</p>
-      ${wsp && !rech ? `<a class="btn grande verde" href="${esc(wsp)}" target="_blank" rel="noopener">💬 Enviar por WhatsApp</a>` : ''}
+      ${oficial ? '<div id="zonaPdf"><button class="btn grande azul" id="btnPdf">📄 Recibo PDF</button></div>' : ''}
+      ${wsp && !rech ? `<a class="btn ${oficial ? '' : 'grande verde'}" href="${esc(wsp)}" target="_blank" rel="noopener">💬 Enviar texto por WhatsApp</a>` : ''}
       <a class="btn" href="#/cliente/${esc(op.idCliente)}">Volver al cliente</a>
       <a class="btn secundario" href="#/inicio">Inicio</a>
     </section>`;
+  if (oficial) $('#btnPdf').onclick = () => prepararPdf(res.nroRecibo, $('#zonaPdf'));
+}
+
+// ---- RECIBO PDF (se comparte como ARCHIVO, sin enlaces públicos) ---------------------
+async function prepararPdf(nro, zona) {
+  if (!navigator.onLine) return aviso('Se necesita señal para generar el PDF.', 'error');
+  zona.innerHTML = '<p class="aviso">Generando el PDF de ' + esc(nro) + '…</p>';
+  try {
+    const r = await llamar('comprobante', { nro });
+    const bin = atob(r.base64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const archivo = new File([bytes], r.nombre, { type: 'application/pdf' });
+    const url = URL.createObjectURL(archivo);
+    const puedeCompartir = navigator.canShare && navigator.canShare({ files: [archivo] });
+    zona.innerHTML = (puedeCompartir ? '<button class="btn grande verde" id="btnShare">📤 Compartir PDF (WhatsApp…)</button>' : '') +
+      `<a class="btn" href="${url}" download="${esc(r.nombre)}">⬇ Descargar PDF</a><a class="btn" href="${url}" target="_blank" rel="noopener">👁 Ver PDF</a>`;
+    if (puedeCompartir) $('#btnShare').onclick = () => navigator.share({ files: [archivo], title: 'Recibo ' + nro }).catch(() => {});
+  } catch (e) {
+    zona.innerHTML = `<p class="aviso error">${esc(e.message)}</p><button class="btn" id="btnPdf">Reintentar</button>`;
+    $('#btnPdf').onclick = () => prepararPdf(nro, zona);
+  }
+}
+
+/** Reduce la foto (máx. 1280 px, JPEG 70 %) para que pese ~150 KB y viaje rápido. */
+function comprimirImagen(archivo) {
+  return new Promise((ok, mal) => {
+    const img = new Image(), url = URL.createObjectURL(archivo);
+    img.onload = () => {
+      const max = 1280, k = Math.min(1, max / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      ok(cv.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = mal;
+    img.src = url;
+  });
 }
 
 // ---- COLA DE ENVÍO -------------------------------------------------------------------

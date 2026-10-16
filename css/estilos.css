@@ -130,3 +130,7 @@ nav.inferior a.activo { color: var(--azul); font-weight: 700; }
   background: var(--azul); z-index: 10; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
 .toast.error { background: var(--rojo); }
 .form label { color: var(--tinta); }
+.btn.azul { background: var(--azul2); color: #fff; border: 0; }
+.foto input { padding: 10px; background: var(--fondo); }
+.foto-prev { display: block; max-width: 160px; margin: 8px 0; border-radius: 8px; border: 1px solid var(--linea); }
+#listaPagos li { cursor: pointer; }

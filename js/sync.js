@@ -8,6 +8,7 @@ import { kvGet, kvSet, colaPut, colaTodos } from './db.js';
 import { aplicar, ahoraISO } from './datos.js';
 
 let _enCurso = null;
+let _ultimoInicio = 0;
 const oyentes = new Set();
 export const alCambiar = (fn) => oyentes.add(fn);
 const avisar = (info) => oyentes.forEach((fn) => { try { fn(info); } catch (e) { /* vista */ } });
@@ -38,6 +39,7 @@ export async function pendientesDeEnvio() {
 /** Envía la cola y luego descarga datos frescos. Evita ejecuciones simultáneas. */
 export function sincronizarTodo() {
   if (_enCurso) return _enCurso;
+  _ultimoInicio = Date.now();
   _enCurso = (async () => {
     avisar({ tipo: 'inicio' });
     try {
@@ -96,6 +98,7 @@ export function iniciarAutoSync() {
   setInterval(() => { if (navigator.onLine && document.visibilityState === 'visible') sincronizarTodo().catch(() => {}); },
     CONFIG.SYNC_CADA_MIN * 60000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && navigator.onLine) sincronizarTodo().catch(() => {});
+    // al volver a la app: solo si pasó más de 1 minuto desde la última sincronización
+    if (document.visibilityState === 'visible' && navigator.onLine && Date.now() - _ultimoInicio > 60000) sincronizarTodo().catch(() => {});
   });
 }
