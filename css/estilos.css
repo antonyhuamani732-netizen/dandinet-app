@@ -151,3 +151,13 @@ nav.inferior a.activo { color: var(--azul); font-weight: 700; }
 .barra i { display: block; height: 100%; border-radius: 6px; }
 .barra-fila .val { font-weight: 600; white-space: nowrap; }
 table.resumen th { font-size: 12px; }
+
+/* modal, mapa y configuración */
+.modal-fondo { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+.modal { background: var(--fondo); width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; border-radius: 16px 16px 0 0; padding: 16px; }
+.modal.grande { height: 92vh; display: flex; flex-direction: column; }
+.mapa { flex: 1; min-height: 300px; border-radius: 12px; margin: 6px 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.mini.apagado { opacity: .5; text-decoration: line-through; }
+.acciones-pago { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
+.btn.verde { border: 0; }

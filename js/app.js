@@ -97,7 +97,7 @@ function manejarErrorSync(e) {
 
 function refrescarSiCorresponde() {
   const h = location.hash || '#/';
-  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe)/.test(h)) enrutar();   // no interrumpir un formulario
+  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
 }
 
 let _avisoT = null;
@@ -116,8 +116,9 @@ function enrutar() {
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
     hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta,
-    mas: vMas, dashboard: vDashboard, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
+    mas: vMas, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
+  cerrarModal();
   Promise.resolve(v(decodeURIComponent(arg || ''))).catch((e) => { vista().innerHTML = `<p class="error">${esc(e.message)}</p>`; });
 }
 
@@ -178,7 +179,6 @@ async function vCliente(id) {
   const r = D.resumen[id] || {}, priv = D.privados[id] || {};
   const pagos = D.pagos.filter((p) => p.ID_CLIENTE === id).slice(-8).reverse();
   const enCola = (await colaTodos()).filter((o) => o.idCliente === id && o.estadoLocal !== 'ok' && o.estadoLocal !== 'rechazado');
-  const wsp = enlaceWhatsApp(c.TELEFONO, plantilla('MsgCobranza', id));
   vista().innerHTML = `
     <section class="ficha">
       <h2>${esc(c.NOMBRES)}</h2>
@@ -190,7 +190,7 @@ async function vCliente(id) {
       <a class="btn grande verde" href="#/cobrar/${esc(id)}">💵 COBRAR</a>
       <div class="botones">
         ${c.TELEFONO ? `<a class="btn" href="tel:${esc(c.TELEFONO)}">📞 Llamar</a>` : ''}
-        ${wsp ? `<a class="btn" href="${esc(wsp)}" target="_blank" rel="noopener">💬 Recordatorio</a>` : ''}
+        <button class="btn" id="btnRecordatorio">💬 Recordatorio</button>
         <a class="btn" href="#/editar/${esc(id)}">✏ Editar datos</a>
       </div>
       <h3>Datos</h3>
@@ -213,13 +213,16 @@ async function vCliente(id) {
           ${s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido' ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
         </div>`).join('') || '<p class="vacio">Sin servicios</p>'}
       <h3>Últimos pagos</h3>
-      <ul class="lista compacta" id="listaPagos">${pagos.map((p) => `<li data-nro="${esc(p.N_RECIBO)}"><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(p.PERIODOS)}</small></div>
-        <div class="der">${soles(p.MONTO)}${p.ESTADO === 'Anulado' ? '<small class="error">ANULADO</small>' : ''}<small>📄 PDF</small></div></li>`).join('') || '<li class="vacio">Sin pagos recientes</li>'}</ul>
+      <ul class="lista compacta" id="listaPagos">${pagos.map((p) => `<li><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(p.PERIODOS)}</small></div>
+        <div class="der">${soles(p.MONTO)}${p.ESTADO === 'Anulado' ? '<small class="error">ANULADO</small>' : ''}
+          <span class="acciones-pago"><button class="mini" data-pdf="${esc(p.N_RECIBO)}">📄 PDF</button>${p.ESTADO !== 'Anulado' ? `<button class="mini rojo" data-anular="${esc(p.N_RECIBO)}">Anular</button>` : ''}</span></div></li>`).join('') || '<li class="vacio">Sin pagos recientes</li>'}</ul>
       <div id="zonaPdf"></div>
     </section>`;
+  $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, plantilla('MsgCobranza', id));
   $('#listaPagos').addEventListener('click', (e) => {
-    const li = e.target.closest('li[data-nro]');
-    if (li) { prepararPdf(li.dataset.nro, $('#zonaPdf'), true); $('#zonaPdf').scrollIntoView({ behavior: 'smooth' }); }
+    const bp = e.target.closest('[data-pdf]'), ba = e.target.closest('[data-anular]');
+    if (bp) { prepararPdf(bp.dataset.pdf, $('#zonaPdf')); $('#zonaPdf').scrollIntoView({ behavior: 'smooth' }); }
+    if (ba) anularRecibo(ba.dataset.anular);
   });
 }
 
@@ -346,7 +349,6 @@ async function vRecibo(idSol) {
     v.detalle.map((d) => `• ${d.periodo} ${d.concepto}: ${soles(d.aplicado)}${d.parcial ? ' (parcial)' : ''}`).join('\n') +
     `\n*TOTAL: ${soles(op.monto)}* · ${op.metodo}${op.operacion ? ' Op. ' + op.operacion : ''}\n` +
     (oficial ? '' : 'El número oficial se asignará al sincronizar.\n') + (cfg.MensajeRecibo || '');
-  const wsp = enlaceWhatsApp(v.telefono, texto);
   vista().innerHTML = `
     <section class="recibo ${rech ? 'rechazado' : ''}">
       <div class="cab"><b>${esc(cfg.Negocio || 'D@NDINET')}</b><span>${oficial ? 'RECIBO DE PAGO' : 'RECIBO PROVISIONAL'}</span>
@@ -363,47 +365,191 @@ async function vRecibo(idSol) {
       ${res.mensaje && oficial ? `<p class="sub">${esc(res.mensaje)}</p>` : ''}
       <p class="pie">Recibo interno de control de pagos. No es comprobante SUNAT.</p>
       ${oficial ? '<div id="zonaPdf"><button class="btn grande azul" id="btnPdf">📄 Recibo PDF</button></div>' : ''}
-      ${wsp && !rech ? `<a class="btn ${oficial ? '' : 'grande verde'}" href="${esc(wsp)}" target="_blank" rel="noopener">💬 Enviar texto por WhatsApp</a>` : ''}
+      ${!rech ? `<button class="btn ${oficial ? '' : 'grande verde'}" id="btnWspTxt">💬 Enviar texto por WhatsApp</button>` : ''}
       <a class="btn" href="#/cliente/${esc(op.idCliente)}">Volver al cliente</a>
       <a class="btn secundario" href="#/inicio">Inicio</a>
     </section>`;
   if (oficial) $('#btnPdf').onclick = () => prepararPdf(res.nroRecibo, $('#zonaPdf'));
+  if (!rech) $('#btnWspTxt').onclick = () => enviarWhatsApp(op.idCliente, texto);
 }
 
-// ---- RECIBO PDF (se comparte como ARCHIVO, sin enlaces públicos) ---------------------
-async function prepararPdf(nro, zona, conAnular = false) {
-  if (!navigator.onLine) return aviso('Se necesita señal para generar el PDF.', 'error');
-  zona.innerHTML = '<p class="aviso">Generando el PDF de ' + esc(nro) + '…</p>';
-  try {
-    const r = await llamar('comprobante', { nro });
-    const bin = atob(r.base64), bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const archivo = new File([bytes], r.nombre, { type: 'application/pdf' });
-    const url = URL.createObjectURL(archivo);
-    const puedeCompartir = navigator.canShare && navigator.canShare({ files: [archivo] });
-    zona.innerHTML = (puedeCompartir ? '<button class="btn grande verde" id="btnShare">📤 Compartir PDF (WhatsApp…)</button>' : '') +
-      `<a class="btn" href="${url}" download="${esc(r.nombre)}">⬇ Descargar PDF</a><a class="btn" href="${url}" target="_blank" rel="noopener">👁 Ver PDF</a>`;
-    if (puedeCompartir) $('#btnShare').onclick = () => navigator.share({ files: [archivo], title: 'Recibo ' + nro }).catch(() => {});
-    if (conAnular) agregarBotonAnular(nro, zona);
-  } catch (e) {
-    zona.innerHTML = `<p class="aviso error">${esc(e.message)}</p><button class="btn" id="btnPdf">Reintentar</button>`;
-    $('#btnPdf').onclick = () => prepararPdf(nro, zona);
+// ---- VENTANA EMERGENTE (modal) ---------------------------------------------------------
+function modal(html) {
+  cerrarModal();
+  const fondo = document.createElement('div');
+  fondo.className = 'modal-fondo'; fondo.id = 'modal';
+  fondo.innerHTML = `<div class="modal">${html}</div>`;
+  fondo.addEventListener('click', (e) => { if (e.target === fondo) cerrarModal(); });
+  document.body.appendChild(fondo);
+  return fondo;
+}
+function cerrarModal() { const m = $('#modal'); if (m) m.remove(); }
+
+// ---- WHATSAPP: elegir número si el cliente tiene dos ------------------------------------
+function elegirTelefono(idCliente) {
+  const c = D.porId[idCliente] || {};
+  const nums = [...new Set([c.TELEFONO, c.TELEFONO2].map((t) => String(t || '').replace(/\D/g, '')).filter((t) => /^9\d{8}$/.test(t)))];
+  if (!nums.length) { aviso('El cliente no tiene un celular válido registrado.', 'error'); return Promise.resolve(null); }
+  if (nums.length === 1) return Promise.resolve(nums[0]);
+  return new Promise((ok) => {
+    const m = modal(`<h3>¿A qué número enviar?</h3><p class="sub">${esc(c.NOMBRES)}</p>
+      ${nums.map((n, i) => `<button class="btn grande ${i ? '' : 'verde'}" data-n="${n}">📱 ${n}${i ? ' (celular 2)' : ' (principal)'}</button>`).join('')}
+      <button class="btn secundario" data-n="">Cancelar</button>`);
+    m.querySelectorAll('[data-n]').forEach((b) => { b.onclick = () => { cerrarModal(); ok(b.dataset.n || null); }; });
+  });
+}
+
+async function enviarWhatsApp(idCliente, mensaje) {
+  const tel = await elegirTelefono(idCliente);
+  if (!tel) return;
+  const url = enlaceWhatsApp(tel, mensaje);
+  if (url) window.open(url, '_blank', 'noopener');
+}
+
+// ---- RECIBO PDF con caché en el celular ---------------------------------------------------
+async function prepararPdf(nro, zona) {
+  const pago = D.pagos.find((x) => x.N_RECIBO === nro);
+  const estado = pago ? pago.ESTADO : 'Válido';
+  let r = await kvGet('pdf_' + nro);
+  if (!r || r.estado !== estado) {          // no está guardado o cambió (por ejemplo, se anuló)
+    if (!navigator.onLine) return aviso('Se necesita señal para generar el PDF la primera vez.', 'error');
+    zona.innerHTML = '<p class="aviso">Generando el PDF de ' + esc(nro) + '… (solo la primera vez)</p>';
+    try {
+      r = await llamar('comprobante', { nro });
+      r.estado = estado;
+      await kvSet('pdf_' + nro, r);
+    } catch (e) {
+      zona.innerHTML = `<p class="aviso error">${esc(e.message)}</p><button class="btn" id="btnPdfR">Reintentar</button>`;
+      $('#btnPdfR').onclick = () => prepararPdf(nro, zona);
+      return;
+    }
   }
+  const bin = atob(r.base64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const archivo = new File([bytes], r.nombre, { type: 'application/pdf' });
+  const url = URL.createObjectURL(archivo);
+  const puedeCompartir = navigator.canShare && navigator.canShare({ files: [archivo] });
+  zona.innerHTML = `<p class="sub">📄 ${esc(r.nombre)}</p>` +
+    (puedeCompartir ? '<button class="btn grande verde" id="btnShare">📤 Compartir PDF (WhatsApp…)</button>' : '') +
+    `<a class="btn" href="${url}" download="${esc(r.nombre)}">⬇ Descargar PDF</a><a class="btn" href="${url}" target="_blank" rel="noopener">👁 Ver PDF</a>`;
+  if (puedeCompartir) $('#btnShare').onclick = () => navigator.share({ files: [archivo], title: 'Recibo ' + nro }).catch(() => {});
 }
 
-function agregarBotonAnular(nro, zona) {
+/** Anulación inmediata (no necesita el PDF). */
+async function anularRecibo(nro) {
   const p = D.pagos.find((x) => x.N_RECIBO === nro);
-  if (!p || p.ESTADO === 'Anulado') return;
-  const b = document.createElement('button');
-  b.className = 'btn rojo'; b.textContent = '🚫 Anular ' + nro;
-  b.onclick = async () => {
-    const motivo = (prompt(`Motivo para ANULAR el recibo ${nro} (${soles(p.MONTO)}):\nEl recibo NO se borra; los meses vuelven a quedar pendientes.`) || '').trim();
-    if (motivo.length < 4) return aviso('Anulación cancelada (el motivo debe tener al menos 4 letras).', 'error');
-    await encolar({ tipo: 'ANULAR_PAGO', nroRecibo: nro, idCliente: p.ID_CLIENTE, motivo });
-    aviso(navigator.onLine ? 'Anulación enviada.' : 'Anulación guardada: se enviará al volver la señal.');
-    b.remove();
+  if (!p || p.ESTADO === 'Anulado') return aviso('El recibo ya está anulado.', 'error');
+  const motivo = (prompt(`Motivo para ANULAR el recibo ${nro} (${soles(p.MONTO)}):\nEl recibo NO se borra; los meses vuelven a quedar pendientes.`) || '').trim();
+  if (motivo.length < 4) return aviso('Anulación cancelada (el motivo debe tener al menos 4 letras).', 'error');
+  await encolar({ tipo: 'ANULAR_PAGO', nroRecibo: nro, idCliente: p.ID_CLIENTE, motivo });
+  aviso(navigator.onLine ? 'Anulación enviada.' : 'Anulación guardada: se enviará al volver la señal.');
+}
+
+// ---- MAPA para ubicar al cliente (OpenStreetMap + Leaflet, se carga solo cuando se usa) ---
+let _leaflet = null;
+function cargarLeaflet() {
+  if (_leaflet) return _leaflet;
+  _leaflet = new Promise((ok, mal) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.onload = () => ok(window.L);
+    js.onerror = () => { _leaflet = null; mal(new Error('No se pudo cargar el mapa (¿sin señal?)')); };
+    document.head.appendChild(js);
+  });
+  return _leaflet;
+}
+
+/** Abre el mapa; devuelve "lat,lng" elegido o null. */
+async function elegirEnMapa(actual) {
+  if (!navigator.onLine) { aviso('El mapa necesita señal. Use "📍 Aquí" o escriba las coordenadas.', 'error'); return null; }
+  let L;
+  try { L = await cargarLeaflet(); } catch (e) { aviso(e.message, 'error'); return null; }
+  const m0 = String(actual || '').match(/(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)/);
+  let punto = m0 ? [Number(m0[1]), Number(m0[2])] : [-11.4325, -74.4825];   // por defecto: Pangoa
+  return new Promise((ok) => {
+    const fondo = modal(`<h3>Ubicar al cliente</h3><p class="sub">Toque el mapa para poner la marca. Puede acercar con dos dedos.</p>
+      <div id="mapa" class="mapa"></div><p class="sub" id="mapaTxt"></p>
+      <div class="botones"><button class="btn" id="mapaYo">📍 Mi ubicación</button><button class="btn verde" id="mapaOk">✔ Usar esta ubicación</button></div>
+      <button class="btn secundario" id="mapaNo">Cancelar</button>`);
+    fondo.querySelector('.modal').classList.add('grande');
+    const mapa = L.map('mapa').setView(punto, m0 ? 17 : 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
+    const marca = L.marker(punto, { draggable: true }).addTo(mapa);
+    const mostrar = () => { $('#mapaTxt').textContent = punto[0].toFixed(5) + ', ' + punto[1].toFixed(5); };
+    mostrar();
+    mapa.on('click', (e) => { punto = [e.latlng.lat, e.latlng.lng]; marca.setLatLng(e.latlng); mostrar(); });
+    marca.on('dragend', () => { const p = marca.getLatLng(); punto = [p.lat, p.lng]; mostrar(); });
+    $('#mapaYo').onclick = () => navigator.geolocation && navigator.geolocation.getCurrentPosition((p) => {
+      punto = [p.coords.latitude, p.coords.longitude]; marca.setLatLng(punto); mapa.setView(punto, 17); mostrar();
+    }, () => aviso('No se pudo obtener la ubicación.', 'error'), { enableHighAccuracy: true, timeout: 15000 });
+    $('#mapaOk').onclick = () => { cerrarModal(); ok(punto[0].toFixed(5) + ',' + punto[1].toFixed(5)); };
+    $('#mapaNo').onclick = () => { cerrarModal(); ok(null); };
+    setTimeout(() => mapa.invalidateSize(), 200);
+  });
+}
+
+// ---- CONFIGURACIÓN: planes, modos, zonas y métodos (solo admin) ---------------------------
+function vConfig() {
+  const servActivos = (plan) => D.servicios.filter((s) => s.PLAN === plan && s.ESTADO === 'Activo').length;
+  const tipos = [['ZONA', 'Zonas'], ['MODO', 'Modos / equipos'], ['METODO', 'Métodos de pago']];
+  vista().innerHTML = `<h2>Configuración</h2>
+    <p class="sub">Los cambios se aplican al sincronizar. Nada se borra: lo que no se usa se desactiva.</p>
+    <h3>Planes y precios</h3>
+    <button class="btn verde" id="nuevoPlan">➕ Nuevo plan</button>
+    <ul class="lista">${D.planes.map((p) => `<li><a href="#" data-plan="${esc(p.PLAN)}"><div><b>${esc(p.PLAN)}</b>
+      <small>${esc(p.CODIGO || '')} · ${servActivos(p.PLAN)} servicio(s) activo(s)</small></div>
+      <div class="der"><b>${soles(p.TARIFA)}</b>${p.ACTIVO === 'No' ? '<small class="error">inactivo</small>' : ''}</div></a></li>`).join('')}</ul>
+    ${tipos.map(([t, tit]) => `<h3>${tit}</h3>
+      <div class="chips">${D.listas.filter((x) => x.TIPO === t && x.VALOR !== 'MIGRADO').map((x) =>
+        `<button class="mini ${x.ACTIVO === 'No' ? 'apagado' : 'sel'}" data-tipo="${t}" data-valor="${esc(x.VALOR)}" data-activo="${x.ACTIVO === 'No' ? 'No' : 'Sí'}">${esc(x.VALOR)}</button>`).join('')}
+        <button class="mini" data-agregar="${t}">➕ Agregar</button></div>`).join('')}
+    <p class="sub">Toque un valor para activarlo o desactivarlo.</p>`;
+  const editarPlan = (p) => {
+    const nuevo = !p, n = p ? servActivos(p.PLAN) : 0;
+    const proximo = hoyISO().slice(0, 7) < '9999' ? (() => { const d = new Date(hoyISO() + 'T12:00:00'); d.setMonth(d.getMonth() + 1); return d.toISOString().slice(0, 7); })() : '';
+    const fondo = modal(`<h3>${nuevo ? 'Nuevo plan' : 'Editar plan'}</h3>
+      <label>Nombre del plan<input id="pNom" value="${esc(p ? p.PLAN : '')}" ${nuevo ? '' : 'disabled'}></label>
+      <label>Código<input id="pCod" value="${esc(p ? p.CODIGO || '' : '')}"></label>
+      <label>Tarifa mensual (S/)<input id="pTar" type="number" step="0.10" inputmode="decimal" value="${p ? Number(p.TARIFA) : ''}"></label>
+      <label class="check"><input type="checkbox" id="pAct" ${!p || p.ACTIVO !== 'No' ? 'checked' : ''}> Plan activo (aparece al registrar clientes)</label>
+      ${n ? `<div class="aviso"><label class="check"><input type="checkbox" id="pApl"> Aplicar la nueva tarifa a los <b>${n}</b> servicio(s) activo(s) de este plan</label>
+        <label>Desde el mes<input id="pDesde" type="month" value="${proximo}"></label>
+        <small>Solo cambian las cuotas SIN pagos desde ese mes. Si no lo marca, los clientes actuales conservan su precio.</small></div>` : ''}
+      <button class="btn grande verde" id="pOk">GUARDAR</button><button class="btn secundario" id="pNo">Cancelar</button>`);
+    $('#pNo').onclick = cerrarModal;
+    $('#pOk').onclick = async () => {
+      const nombre = $('#pNom').value.trim(), tarifa = Number($('#pTar').value || 0);
+      if (nombre.length < 3) return aviso('Escriba el nombre del plan.', 'error');
+      if (nuevo && D.planes.some((x) => x.PLAN.toUpperCase() === nombre.toUpperCase())) return aviso('Ya existe un plan con ese nombre.', 'error');
+      if (!(tarifa > 0)) return aviso('La tarifa debe ser mayor a 0.', 'error');
+      const aplicar = !!(fondo.querySelector('#pApl') && $('#pApl').checked);
+      const desde = aplicar ? $('#pDesde').value : '';
+      if (aplicar && !desde) return aviso('Elija desde qué mes rige la nueva tarifa.', 'error');
+      if (aplicar && !confirm(`Se cambiará a ${soles(tarifa)} la mensualidad de ${n} servicio(s) desde ${desde}. ¿Continuar?`)) return;
+      await encolar({ tipo: 'GUARDAR_PLAN', plan: nombre, tarifa, fecha: desde ? desde + '-01' : '',
+        datos: { codigo: $('#pCod').value.trim(), activo: $('#pAct').checked ? 'Sí' : 'No', aplicarServicios: aplicar } });
+      cerrarModal();
+      aviso(navigator.onLine ? 'Plan enviado.' : 'Guardado: se enviará al volver la señal.');
+    };
   };
-  zona.appendChild(b);
+  $('#nuevoPlan').onclick = () => editarPlan(null);
+  vista().querySelectorAll('[data-plan]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); editarPlan(D.planes.find((p) => p.PLAN === a.dataset.plan)); }; });
+  vista().querySelectorAll('[data-valor]').forEach((b) => { b.onclick = async () => {
+    const activar = b.dataset.activo === 'No';
+    if (!confirm(`¿${activar ? 'Activar' : 'Desactivar'} "${b.dataset.valor}"?`)) return;
+    await encolar({ tipo: 'GUARDAR_LISTA', datos: { tipo: b.dataset.tipo, valor: b.dataset.valor, activo: activar ? 'Sí' : 'No' } });
+    b.dataset.activo = activar ? 'Sí' : 'No'; b.classList.toggle('apagado', !activar); b.classList.toggle('sel', activar);
+    aviso('Enviado.');
+  }; });
+  vista().querySelectorAll('[data-agregar]').forEach((b) => { b.onclick = async () => {
+    const valor = (prompt('Nuevo valor:') || '').trim();
+    if (valor.length < 2) return;
+    await encolar({ tipo: 'GUARDAR_LISTA', datos: { tipo: b.dataset.agregar, valor, activo: 'Sí' } });
+    aviso(navigator.onLine ? 'Agregado: aparecerá al sincronizar.' : 'Guardado: se enviará al volver la señal.');
+  }; });
 }
 
 /** Reduce la foto (máx. 1280 px, JPEG 70 %) para que pese ~150 KB y viaje rápido. */
@@ -499,9 +645,7 @@ function vCorte(idServ) {
     if (!confirm(`¿${$('#acc').selectedOptions[0].text.split(' (')[0]} de ${s.CLIENTE}?`)) return;
     await encolar({ tipo: $('#acc').value, idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, motivo, fecha: hoyISO(), cobrarMesCorte: $('#cobrarMes').checked });
     aviso(navigator.onLine ? 'Enviado. Se aplicará en segundos.' : 'Guardado sin señal: se enviará al volver la conexión.');
-    const c = D.porId[s.ID_CLIENTE];
-    const wsp = c && enlaceWhatsApp(c.TELEFONO, plantilla('MsgCorte', s.ID_CLIENTE));
-    if (wsp && $('#acc').value === 'CORTAR' && confirm('¿Avisar al cliente por WhatsApp?')) window.open(wsp, '_blank', 'noopener');
+    if ($('#acc').value === 'CORTAR' && confirm('¿Avisar al cliente por WhatsApp?')) await enviarWhatsApp(s.ID_CLIENTE, plantilla('MsgCorte', s.ID_CLIENTE));
     location.hash = '#/cliente/' + s.ID_CLIENTE;
   };
 }
@@ -540,6 +684,7 @@ function vMas() {
       <a class="btn" href="#/cortar">✂ A cortar</a>
       <a class="btn" href="#/hoy">🧾 Mis cobros de hoy</a>
       <a class="btn" href="#/cuenta">👤 Mi cuenta</a>
+      <a class="btn" href="#/config">⚙ Planes y listas</a>
     </div>`;
 }
 
@@ -564,7 +709,7 @@ function vFormCliente(id) {
     ${campo('DIRECCION', 'Dirección *')}
     ${campo('REFERENCIA', 'Referencia')}
     <label>Zona *<select id="f_ZONA"><option value="">— elegir —</option>${lst('ZONA').map((z) => `<option ${z === c.ZONA ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
-    <label>Coordenadas<div class="fila"><input id="f_COORDENADAS" value="${esc(c.COORDENADAS || '')}" placeholder="-11.44, -74.43"><button type="button" class="mini" id="gps">📍 Aquí</button></div></label>
+    <label>Coordenadas<div class="fila"><input id="f_COORDENADAS" value="${esc(c.COORDENADAS || '')}" placeholder="-11.44, -74.43"><button type="button" class="mini" id="gps">📍 Aquí</button><button type="button" class="mini" id="btnMapa">🗺 Mapa</button></div></label>
     ${campo('DIA_VENC', 'Día de vencimiento (1–28)', `inputmode="numeric" placeholder="${esc(D.config.DiaVenc || 4)}"`)}
     ${campo('OBSERVACIONES', 'Observaciones')}
     <h3>WiFi y router</h3>
@@ -581,6 +726,7 @@ function vFormCliente(id) {
     <button class="btn grande verde" id="ok">${editar ? 'GUARDAR CAMBIOS' : 'REGISTRAR CLIENTE'}</button>
     <a class="btn secundario" href="${editar ? '#/cliente/' + esc(id) : '#/mas'}">Cancelar</a></section>`;
   if (!editar) $('#s_plan').onchange = (e) => { const o = e.target.selectedOptions[0]; $('#s_tarifa').value = o && o.dataset.t ? o.dataset.t : ''; };
+  $('#btnMapa').onclick = async () => { const r = await elegirEnMapa($('#f_COORDENADAS').value); if (r) $('#f_COORDENADAS').value = r; };
   $('#gps').onclick = () => {
     if (!navigator.geolocation) return aviso('Este celular no permite ubicación.', 'error');
     navigator.geolocation.getCurrentPosition((p) => { $('#f_COORDENADAS').value = p.coords.latitude.toFixed(5) + ',' + p.coords.longitude.toFixed(5); },
