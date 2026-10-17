@@ -42,6 +42,21 @@ const MESES = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SET', 'O
 export const txtPeriodo = (iso) => { const s = String(iso || ''); return s.length >= 7 ? MESES[Number(s.slice(5, 7)) - 1] + '-' + s.slice(0, 4) : s; };
 export const txtFecha = (iso) => { const s = String(iso || ''); return s.length >= 10 ? s.slice(8, 10) + '/' + s.slice(5, 7) + '/' + s.slice(0, 4) : ''; };
 /** Fecha de hoy en Lima como aaaa-mm-dd */
+/**
+ * Mora para mostrar: hasta 30 días → "18 días"; más de 30 → meses de CALENDARIO desde el
+ * vencimiento (respeta el día de pago de cada cliente). Ej.: venció el 04/08, hoy 16/10 → "2 meses".
+ */
+export function txtMora(dias) {
+  const d = Math.max(0, Math.floor(Number(dias) || 0));
+  if (d <= 30) return d === 1 ? '1 día' : d + ' días';
+  const hoy = new Date(hoyISO() + 'T12:00:00'), venc = new Date(hoy);
+  venc.setDate(venc.getDate() - d);
+  let m = (hoy.getFullYear() - venc.getFullYear()) * 12 + (hoy.getMonth() - venc.getMonth());
+  if (hoy.getDate() < venc.getDate()) m--;
+  m = Math.max(1, m);
+  return m === 1 ? '1 mes' : m + ' meses';
+}
+
 export const hoyISO = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date());
 export const ahoraISO = () => {
   const d = new Date(), f = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima', hour12: false,

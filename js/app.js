@@ -6,7 +6,7 @@ import { llamar } from './api.js';
 import { encolar, sincronizarTodo, iniciarAutoSync, alCambiar, pendientesDeEnvio, siguienteProvisional } from './sync.js';
 import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
-  cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado,
+  cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado, txtMora,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -136,7 +136,7 @@ function enrutar() {
   RUTA = ruta;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
-    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta,
+    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago,
     mas: vMas, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
   cerrarModal();
@@ -210,7 +210,7 @@ async function vCliente(id) {
       <h2>${esc(c.NOMBRES)}</h2>
       <p class="sub">${esc(id)} · DNI/RUC ${esc(c.DNI_RUC)} · <span class="chip ${claseEstado(r.ESTADO)}">${esc(r.ESTADO)}</span></p>
       <div class="deuda ${Number(r.DEUDA_VENCIDA) > 0 ? 'roja' : 'verde'}">
-        <span>Deuda vencida</span><b>${soles(r.DEUDA_VENCIDA)}</b><small>${r.MESES_ADEUDA || 0} mes(es) · ${r.DIAS_ATRASO || 0} días de atraso${r.ALERTA ? ' · ' + esc(r.ALERTA) : ''}</small>
+        <span>Deuda vencida</span><b>${soles(r.DEUDA_VENCIDA)}</b><small>${r.MESES_ADEUDA || 0} cuota(s) vencida(s) · ${Number(r.DIAS_ATRASO) > 0 ? txtMora(r.DIAS_ATRASO) + ' de atraso' : 'al día'}${r.ALERTA ? ' · ' + esc(r.ALERTA) : ''}</small>
       </div>
       ${enCola.length ? `<p class="aviso">${ic('reloj')}<span>${enCola.length} operación(es) de este cliente en cola de envío.</span></p>` : ''}
       <a class="btn grande verde" href="#/cobrar/${esc(id)}">${ic('cobrar')}Cobrar</a>
@@ -398,6 +398,35 @@ async function vRecibo(idSol) {
     </section>`;
   if (oficial) $('#btnPdf').onclick = () => prepararPdf(res.nroRecibo, $('#zonaPdf'));
   if (!rech) $('#btnWspTxt').onclick = () => enviarWhatsApp(op.idCliente, texto);
+}
+
+// ---- RECIBO DE UN PAGO DEL SERVIDOR (registrado en otro equipo o antes de borrar datos) ---
+// Usa los pagos que ya llegan en la sincronización: no descarga nada extra ni ocupa más espacio.
+function vPago(nro) {
+  const p = D.pagos.find((x) => x.N_RECIBO === nro);
+  if (!p) { vista().innerHTML = '<p class="error">Recibo no encontrado en los datos del celular (solo se guardan los últimos 13 meses).</p>'; return; }
+  const cfg = D.config, anulado = p.ESTADO === 'Anulado';
+  const periodos = String(p.PERIODOS || '').split(/\s*[,;]\s*/).filter(Boolean);
+  vista().innerHTML = `
+    <section class="recibo ${anulado ? 'rechazado' : ''}">
+      <div class="cab"><b>${esc(cfg.Negocio || 'D@NDINET')}</b><span>RECIBO DE PAGO</span><strong>N° ${esc(p.N_RECIBO)}</strong></div>
+      ${anulado ? '<p class="aviso error">Este recibo está ANULADO.</p>' : ''}
+      <dl><dt>Fecha</dt><dd>${esc(txtFecha(p.FECHA))}</dd><dt>Cliente</dt><dd>${esc(p.CLIENTE)}</dd>
+        <dt>Código</dt><dd>${esc(p.ID_CLIENTE)}</dd><dt>Atendió</dt><dd>${esc(p.USUARIO)}</dd></dl>
+      <table class="periodos"><thead><tr><th>Periodos pagados</th></tr></thead><tbody>
+        ${periodos.map((x) => `<tr><td>${esc(x)}</td></tr>`).join('') || '<tr><td>—</td></tr>'}</tbody></table>
+      <div class="totalr">TOTAL <b>${soles(p.MONTO)}</b></div>
+      <p class="sub">${esc(p.METODO)}${p.OPERACION ? ' · Op. ' + esc(p.OPERACION) : ''}${Number(p.SALDO_RESTANTE) > 0 ? ' · Saldo pendiente ' + soles(p.SALDO_RESTANTE) : ''}</p>
+      <p class="pie">Recibo interno de control de pagos. No es comprobante SUNAT.</p>
+      <div id="zonaPdf"><button class="btn grande azul" id="btnPdf">${ic('documento')}Recibo PDF</button></div>
+      ${anulado ? '' : `<button class="btn" id="btnWsp">${ic('chat')}Enviar texto por WhatsApp</button>`}
+      <a class="btn" href="#/cliente/${esc(p.ID_CLIENTE)}">Ver cliente</a>
+      <a class="btn secundario" href="#/hoy">Volver</a>
+    </section>`;
+  $('#btnPdf').onclick = () => prepararPdf(p.N_RECIBO, $('#zonaPdf'));
+  if (!anulado) $('#btnWsp').onclick = () => enviarWhatsApp(p.ID_CLIENTE,
+    `*${cfg.Negocio || 'D@NDINET'}* — RECIBO DE PAGO ${p.N_RECIBO}\nFecha: ${txtFecha(p.FECHA)}\nCliente: ${p.CLIENTE}\nPeriodos: ${periodos.join(', ')}\n` +
+    `*TOTAL: ${soles(p.MONTO)}* · ${p.METODO}${p.OPERACION ? ' Op. ' + p.OPERACION : ''}\n${cfg.MensajeRecibo || ''}`);
 }
 
 // ---- VENTANA EMERGENTE (modal) ---------------------------------------------------------
@@ -674,18 +703,41 @@ async function vHoy() {
   vista().innerHTML = `<p class="eyebrow">${esc(txtFecha(hoyISO()))}</p><h2>Mis cobros de hoy</h2>
     <section class="hero"><span class="eyebrow">Total cobrado</span><span class="monto">${soles(total)}</span><span class="de">${items.length} recibo(s)</span></section>
     <table class="resumen"><tbody>${Object.entries(porMetodo).map(([m, v]) => `<tr><td>${esc(m)}</td><td>${soles(v)}</td></tr>`).join('')}</tbody></table>
-    <ul class="lista">${items.map((x) => `<li><a href="${x.id ? '#/recibo/' + esc(x.id) : '#/hoy'}"><div><b>${esc(x.nro)}</b><small>${esc(x.cliente)} · ${esc(x.metodo)}</small></div>
+    <ul class="lista">${items.map((x) => `<li><a href="${x.id ? '#/recibo/' + esc(x.id) : '#/pago/' + encodeURIComponent(x.nro)}"><div><b>${esc(x.nro)}</b><small>${esc(x.cliente)} · ${esc(x.metodo)}</small></div>
       <div class="der">${soles(x.monto)}${x.estado !== 'ok' ? `<span class="chip e-porvencer">${ic('reloj')}Sin enviar</span>` : ''}</div></a></li>`).join('') || '<li class="vacio">Aún no hay cobros hoy.</li>'}</ul>`;
 }
 
-// ---- A CORTAR ------------------------------------------------------------------------
-function vACortar() {
-  const lista = Object.values(D.resumen).filter((r) => /CORTAR/.test(r.ALERTA || '')).sort((a, b) => Number(b.DIAS_ATRASO) - Number(a.DIAS_ATRASO));
-  vista().innerHTML = `<h2>Clientes a cortar (${lista.length})</h2>
+// ---- A CORTAR (con filtros: zona, cuotas vencidas y orden) --------------------------
+async function vACortar() {
+  const todos = Object.values(D.resumen).filter((r) => /CORTAR/.test(r.ALERTA || ''));
+  const zonas = [...new Set(todos.map((r) => r.ZONA).filter(Boolean))].sort();
+  const f = Object.assign({ zona: '', meses: 0, orden: 'deuda-desc' }, (await kvGet('filtrosCortar')) || {});
+  const opt = (v, t, sel) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(t)}</option>`;
+  vista().innerHTML = `<h2>Clientes a cortar</h2>
     <p class="sub">Regla: ${esc(D.config.DiasCorte || 30)} días o más de atraso.</p>
-    <ul class="lista">${lista.map((r) => `<li><a href="#/cliente/${esc(r.ID_CLIENTE)}"><div><b>${esc(r.NOMBRES)}</b>
-      <small>${esc(r.ID_CLIENTE)} · ${esc(r.ZONA)} · ${r.DIAS_ATRASO} días · PPPoE ${esc(r.PPPOE || '-')}</small></div>
-      <div class="der"><b class="error">${soles(r.DEUDA_VENCIDA)}</b></div></a></li>`).join('') || '<li class="vacio">Nadie para cortar.</li>'}</ul>`;
+    <div class="filtros tres">
+      <label>Zona<select id="fZona">${opt('', 'Todas', f.zona)}${zonas.map((z) => opt(z, z, f.zona)).join('')}</select></label>
+      <label>Cuotas vencidas<select id="fMeses">${[[0, 'Todas'], [1, '1 o más'], [2, '2 o más'], [3, '3 o más'], [6, '6 o más'], [12, '12 o más']].map(([v, t]) => opt(v, t, f.meses)).join('')}</select></label>
+      <label>Orden<select id="fOrden">${opt('deuda-desc', 'Deuda: mayor a menor', f.orden)}${opt('deuda-asc', 'Deuda: menor a mayor', f.orden)}${opt('dias-desc', 'Atraso: mayor a menor', f.orden)}${opt('dias-asc', 'Atraso: menor a mayor', f.orden)}</select></label>
+    </div>
+    <p class="sub" id="cTotal"></p>
+    <ul class="lista" id="cLista"></ul>`;
+  const pintar = async () => {
+    f.zona = $('#fZona').value; f.meses = Number($('#fMeses').value); f.orden = $('#fOrden').value;
+    await kvSet('filtrosCortar', f);
+    const [campo, dir] = f.orden.split('-');
+    const valor = (r) => Number(campo === 'deuda' ? r.DEUDA_VENCIDA : r.DIAS_ATRASO) || 0;
+    const lista = todos.filter((r) => (!f.zona || r.ZONA === f.zona) && (Number(r.MESES_ADEUDA) || 0) >= f.meses)
+      .sort((x, y) => (dir === 'asc' ? 1 : -1) * (valor(x) - valor(y)));
+    const suma = lista.reduce((t, r) => t + Number(r.DEUDA_VENCIDA || 0), 0);
+    $('#cTotal').textContent = `${lista.length} cliente(s) · deuda vencida ${soles(suma)}`;
+    $('#cLista').innerHTML = lista.map((r) => `<li><a href="#/cliente/${esc(r.ID_CLIENTE)}"><div><b>${esc(r.NOMBRES)}</b>
+      <small>${esc(r.ID_CLIENTE)} · ${esc(r.ZONA)}${r.PPPOE ? ' · PPPoE ' + esc(r.PPPOE) : ''}</small>
+      <small>${Number(r.MESES_ADEUDA) || 0} cuota(s) vencida(s) · ${esc(txtMora(r.DIAS_ATRASO))} de atraso</small></div>
+      <div class="der"><b class="error">${soles(r.DEUDA_VENCIDA)}</b></div></a></li>`).join('') || '<li class="vacio">Nadie para cortar con estos filtros.</li>';
+  };
+  ['#fZona', '#fMeses', '#fOrden'].forEach((x) => { $(x).onchange = pintar; });
+  pintar();
 }
 
 // ---- CORTE / REACTIVACIÓN ------------------------------------------------------------
@@ -999,7 +1051,7 @@ function pintarDashboard(d, desdeCache) {
       <small>${esc(c.id)} · ${esc(c.estado)} · ${c.meses} mes(es)</small></div><div class="der"><b class="error">${soles(c.deuda)}</b></div></a></li>`).join('') || '<li class="vacio">Sin deudores</li>'}</ul>
     <h3>Riesgo de corte</h3>
     <ul class="lista">${d.riesgo.map((c) => `<li><a href="#/cliente/${esc(c.id)}"><div><b>${esc(c.nombre)}</b>
-      <small>${c.dias} días de atraso · ${soles(c.deuda)}</small></div><div class="der"><span class="chip ${c.situacion === 'A CORTAR' ? 'e-moroso' : 'e-porvencer'}">${esc(c.situacion)}</span></div></a></li>`).join('') || '<li class="vacio">Nadie en riesgo</li>'}</ul>`;
+      <small>${esc(txtMora(c.dias))} de atraso · ${soles(c.deuda)}</small></div><div class="der"><span class="chip ${c.situacion === 'A CORTAR' ? 'e-moroso' : 'e-porvencer'}">${esc(c.situacion)}</span></div></a></li>`).join('') || '<li class="vacio">Nadie en riesgo</li>'}</ul>`;
 }
 
 // ---- CUENTA ----------------------------------------------------------------------------
@@ -1009,10 +1061,15 @@ async function vCuenta() {
     <div class="cuenta-perfil"><span class="avatar" aria-hidden="true">${esc(iniciales(PERFIL.nombre))}</span>
       <div><b>${esc(PERFIL.nombre)}</b><small>${esc(PERFIL.email)} · ${esc(PERFIL.rol)}</small></div></div>
     <p class="sub">Versión ${CONFIG.VERSION}. Datos del ${esc(txtFecha(D.generado))} ${esc(String(D.generado || '').slice(11, 16))}.</p>
+    <h3>Apariencia</h3>
+    <div class="tema" role="group" aria-label="Tema">${[['auto', 'Automático'], ['dia', 'Día (sol)'], ['noche', 'Noche']].map(([v, t]) =>
+      `<button class="mini ${temaActual() === v ? 'sel' : ''}" data-tema="${v}" aria-pressed="${temaActual() === v}">${t}</button>`).join('')}</div>
+    <p class="sub">"Día" usa más contraste para leer en la calle. "Automático" sigue la configuración del celular.</p>
     <button class="btn" id="btnSync">${ic('sync')}Sincronizar ahora</button>
     <button class="btn rojo" id="salir">${ic('salir')}Cerrar sesión</button>
     ${pend ? `<p class="aviso error">Tiene ${pend} operación(es) sin enviar. Sincronice antes de cerrar sesión.</p>` : ''}</section>`;
   $('#btnSync').onclick = sincronizarManual;
+  vista().querySelectorAll('[data-tema]').forEach((b) => { b.onclick = () => { ponerTema(b.dataset.tema); vCuenta(); }; });
   $('#salir').onclick = async () => {
     if (pend && !(await confirmar(`Hay ${pend} operación(es) SIN ENVIAR que se perderían.`, { titulo: '¿Cerrar sesión de todos modos?', si: 'Cerrar sesión', peligro: true }))) return;
     if (!(await confirmar('Se borrarán los datos guardados en este celular.', { titulo: 'Cerrar sesión', si: 'Cerrar sesión', peligro: true }))) return;
@@ -1021,6 +1078,16 @@ async function vCuenta() {
     location.hash = '';
     location.reload();
   };
+}
+
+// ---- TEMA (Automático / Día / Noche) — se guarda solo en este celular ------------------
+function temaActual() { try { return localStorage.getItem('tema') || 'auto'; } catch (e) { return 'auto'; } }
+function ponerTema(t) {
+  try { if (t === 'auto') localStorage.removeItem('tema'); else localStorage.setItem('tema', t); } catch (e) { /* sin almacenamiento */ }
+  if (t === 'auto') delete document.documentElement.dataset.tema; else document.documentElement.dataset.tema = t;
+  // color de la barra del celular
+  const oscuro = t === 'noche' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.setAttribute('content', oscuro ? '#0f1730' : '#1c1e54'); });
 }
 
 window.addEventListener('DOMContentLoaded', arrancar);

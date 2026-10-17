@@ -11,6 +11,8 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icono-192.png">
   <link rel="apple-touch-icon" href="icons/icono-192.png">
+  <script>/* tema elegido (Día / Noche) antes de pintar, para que no parpadee */
+    try { var t = localStorage.getItem('tema'); if (t === 'dia' || t === 'noche') document.documentElement.dataset.tema = t; } catch (e) {}</script>
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/estilos.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>

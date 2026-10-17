@@ -6,7 +6,7 @@
    - Pesos 400–700 (no 300): se leen bajo el sol.
    - Cifras tabulares para dinero.
    - Botones píldora con mínimo 44 px de alto (dedo).
-   - Modo claro por defecto y modo oscuro automático (prefers-color-scheme).
+   - Tema: Automático (según el celular), Día (alto contraste) o Noche. Se elige en Mi cuenta.
    Todos los demás estilos (estilos.css) usan SOLO estas variables.
    ========================================================================== */
 
@@ -58,6 +58,7 @@
   --t-2xl: 1.75rem;    /* 28 px · montos destacados */
   --t-3xl: 2.25rem;    /* 36 px · cifra principal */
   --w-normal: 400; --w-medio: 500; --w-semi: 600; --w-negrita: 700;
+  --w-cuerpo: 400;                  /* peso del texto normal (500 en modo Día) */
   --lh-ajustado: 1.15; --lh-normal: 1.45;
   --track-titulo: -0.02em;          /* tracking negativo en títulos (rasgo Stripe) */
 
@@ -85,9 +86,12 @@
   --alto-nav: 64px;
 }
 
-/* ==== MODO OSCURO (automático según el celular) ================================ */
+/* ==== MODO NOCHE ==================================================================
+   Se aplica (a) automáticamente si el celular está en oscuro y el usuario no eligió "Día",
+   o (b) siempre que el usuario eligió "Noche" (html[data-tema="noche"]).
+   Los dos bloques tienen LOS MISMOS valores: si cambia uno, cambie el otro. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-tema="dia"]) {
     color-scheme: dark;
     --c-primario: #7b6bff;          /* con texto oscuro encima: 5.9:1 */
     --c-primario-hover: #9284ff;
@@ -123,6 +127,68 @@
     --s-3: 0 16px 40px rgba(0, 0, 0, 0.6);
     --foco: 0 0 0 3px rgba(123, 107, 255, 0.55);
   }
+}
+:root[data-tema="noche"] {
+  color-scheme: dark;
+  --c-primario: #7b6bff;          /* con texto oscuro encima: 5.9:1 */
+  --c-primario-hover: #9284ff;
+  --c-primario-press: #a99eff;
+  --c-primario-suave: #26234d;
+  --c-sobre-primario: #0b1220;
+  --c-marca-oscura: #0f1730;
+  --c-sobre-marca: #e8edf7;
+
+  --c-fondo: #0b1220;
+  --c-superficie: #131c2e;
+  --c-superficie-2: #1a2539;
+  --c-superposicion: rgba(0, 0, 0, 0.6);
+
+  --c-tinta: #e8edf7;
+  --c-tinta-2: #c9d3e4;
+  --c-tenue: #9aa9c2;
+  --c-enlace: #a99eff;
+
+  --c-linea: #24304a;
+  --c-borde-campo: #5d6d89;
+
+  --c-ok: #4fc277;        --c-ok-fondo: #12301f;
+  --c-aviso: #f2c14e;     --c-aviso-fondo: #3a2e0c;
+  --c-peligro: #ff7b72;   --c-peligro-fondo: #3d1517;
+  --c-susp: #ffaa5c;      --c-susp-fondo: #3b2410;
+  --c-neutro: #a8b6cc;    --c-neutro-fondo: #212c40;
+  --c-baja: #c3cbd8;      --c-baja-fondo: #2a3446;
+  --c-ok-solido: #238a42; --c-peligro-solido: #b8352b;
+
+  --s-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --s-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --s-3: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --foco: 0 0 0 3px rgba(123, 107, 255, 0.55);
+}
+
+/* ==== MODO DÍA (alto contraste para la calle, bajo el sol) =========================
+   Elegido a mano en Mi cuenta → Apariencia. Fondo blanco, textos y bordes más oscuros,
+   letra un poco más gruesa. Todo el texto supera 7:1 (nivel AAA). */
+:root[data-tema="dia"] {
+  color-scheme: light;
+  --c-fondo: #eef2f7;
+  --c-superficie: #ffffff;
+  --c-superficie-2: #e6ebf2;
+  --c-tinta: #031427;
+  --c-tinta-2: #0d253d;
+  --c-tenue: #2f415a;               /* 10:1 sobre blanco */
+  --c-linea: #b9c4d2;
+  --c-borde-campo: #4f6079;         /* 6.5:1 */
+  --c-primario: #4330e6;            /* 7.3:1 con blanco */
+  --c-primario-hover: #3727c4;
+  --c-enlace: #3727c4;
+  --c-ok: #0d5a24;        --c-ok-fondo: #e1f2e6;
+  --c-aviso: #5c3b00;     --c-aviso-fondo: #ffefc2;
+  --c-peligro: #8f150c;   --c-peligro-fondo: #fde4e2;
+  --c-susp: #7a3a00;      --c-susp-fondo: #ffe9d4;
+  --c-neutro: #33425a;    --c-neutro-fondo: #e6eaf0;
+  --c-peligro-solido: #a6261c;
+  --w-cuerpo: 500;
+  --s-1: 0 1px 3px rgba(0, 30, 70, 0.16), 0 0 0 1px rgba(0, 30, 70, 0.08);
 }
 
 /* ==== MOVIMIENTO REDUCIDO ======================================================= */
