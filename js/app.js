@@ -410,14 +410,14 @@ async function enviarWhatsApp(idCliente, mensaje) {
 async function prepararPdf(nro, zona) {
   const pago = D.pagos.find((x) => x.N_RECIBO === nro);
   const estado = pago ? pago.ESTADO : 'Válido';
-  let r = await kvGet('pdf_' + nro);
+  let r = await kvGet('pdf2_' + nro);
   if (!r || r.estado !== estado) {          // no está guardado o cambió (por ejemplo, se anuló)
     if (!navigator.onLine) return aviso('Se necesita señal para generar el PDF la primera vez.', 'error');
     zona.innerHTML = '<p class="aviso">Generando el PDF de ' + esc(nro) + '… (solo la primera vez)</p>';
     try {
       r = await llamar('comprobante', { nro });
       r.estado = estado;
-      await kvSet('pdf_' + nro, r);
+      await kvSet('pdf2_' + nro, r);
     } catch (e) {
       zona.innerHTML = `<p class="aviso error">${esc(e.message)}</p><button class="btn" id="btnPdfR">Reintentar</button>`;
       $('#btnPdfR').onclick = () => prepararPdf(nro, zona);
@@ -702,7 +702,7 @@ function vFormCliente(id) {
   const planes = D.planes.filter((p) => p.ACTIVO !== 'No');
   vista().innerHTML = `<section class="form"><h2>${editar ? 'Editar cliente' : 'Nuevo cliente'}</h2>
     ${editar ? `<p class="sub">${esc(id)}</p>` : '<p class="sub">Los campos con * son obligatorios. El ID se asigna al sincronizar.</p>'}
-    ${campo('DNI_RUC', 'DNI (8) o RUC (11) *', 'inputmode="numeric" maxlength="11"')}
+    <label>DNI (8) o RUC (11) *<div class="fila"><input id="f_DNI_RUC" value="${esc(c.DNI_RUC || '')}" inputmode="numeric" maxlength="11"><button type="button" class="mini" id="btnDni">🔎 Consultar</button></div></label>
     ${campo('NOMBRES', 'Nombres y apellidos / razón social *', 'autocapitalize="characters"')}
     ${campo('TELEFONO', 'Celular *', 'inputmode="numeric" maxlength="9"')}
     ${campo('TELEFONO2', 'Celular 2', 'inputmode="numeric" maxlength="9"')}
@@ -726,6 +726,31 @@ function vFormCliente(id) {
     <button class="btn grande verde" id="ok">${editar ? 'GUARDAR CAMBIOS' : 'REGISTRAR CLIENTE'}</button>
     <a class="btn secundario" href="${editar ? '#/cliente/' + esc(id) : '#/mas'}">Cancelar</a></section>`;
   if (!editar) $('#s_plan').onchange = (e) => { const o = e.target.selectedOptions[0]; $('#s_tarifa').value = o && o.dataset.t ? o.dataset.t : ''; };
+  $('#btnDni').onclick = async () => {
+    const dni = $('#f_DNI_RUC').value.trim();
+    if (!/^\d{8}$|^\d{11}$/.test(dni)) return aviso('Escriba primero el DNI (8 dígitos) o RUC (11).', 'error');
+    const web = () => {
+      if (!confirm('¿Abrir la consulta en la web? (el número se copia para pegarlo)')) return;
+      navigator.clipboard && navigator.clipboard.writeText(dni).catch(() => {});
+      window.open(dni.length === 11 ? 'https://e-consultaruc.sunat.gob.pe/cl-ti-itmrconsruc/FrameCriterioBusquedaWeb.jsp' : 'https://eldni.com/pe/buscar-datos-por-dni', '_blank', 'noopener');
+    };
+    if (!navigator.onLine) { aviso('Sin señal: no se puede consultar ahora.', 'error'); return; }
+    $('#btnDni').disabled = true; $('#btnDni').textContent = '⏳';
+    try {
+      const r = await llamar('consultarDocumento', { numero: dni });
+      if (r.yaCliente && r.yaCliente !== id) aviso(`Ese documento ya es del cliente ${r.yaCliente} ${r.nombre}.`, 'error');
+      else {
+        $('#f_NOMBRES').value = r.nombre;
+        if (r.direccion && !$('#f_DIRECCION').value) $('#f_DIRECCION').value = r.direccion;
+        aviso('Nombre encontrado' + (r.restantes !== undefined ? ` · le quedan ${r.restantes} consultas este mes` : '') + '.');
+      }
+    } catch (e) {
+      aviso(e.message, 'error');
+      if (e.codigo !== 'AUTH') web();
+    } finally {
+      $('#btnDni').disabled = false; $('#btnDni').textContent = '🔎 Consultar';
+    }
+  };
   $('#btnMapa').onclick = async () => { const r = await elegirEnMapa($('#f_COORDENADAS').value); if (r) $('#f_COORDENADAS').value = r; };
   $('#gps').onclick = () => {
     if (!navigator.geolocation) return aviso('Este celular no permite ubicación.', 'error');
