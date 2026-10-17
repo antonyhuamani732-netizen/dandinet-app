@@ -118,7 +118,7 @@ function manejarErrorSync(e) {
 
 function refrescarSiCorresponde() {
   const h = location.hash || '#/';
-  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
+  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
 }
 
 let _avisoT = null;
@@ -136,7 +136,7 @@ function enrutar() {
   RUTA = ruta;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
-    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan,
+    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan, pausa: vPausa,
     mas: vMas, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
   cerrarModal();
@@ -232,12 +232,16 @@ async function vCliente(id) {
       <h3>Servicios</h3>
       ${serviciosDe(id).map((s) => `
         <div class="servicio">
-          <div><b>${esc(s.PLAN)}</b><small>${esc(s.ID_SERV)} · ${esc(s.MODO)} · ${soles(s.TARIFA)}/mes · PPPoE ${esc(s.PPPOE || '-')}</small></div>
-          <div class="der"><span class="chip ${claseEstado(s.ESTADO)}">${esc(s.ESTADO)}</span>
+          <div class="serv-cab"><div><b>${esc(s.PLAN)}</b><small>${esc(s.ID_SERV)} · ${esc(s.MODO)} · ${soles(s.TARIFA)}/mes · PPPoE ${esc(s.PPPOE || '-')}</small>
+          ${pausaDe(s.ID_SERV) ? `<small class="pausa-info">${ic('reloj')}Pausa vacacional ${esc(txtFecha(pausaDe(s.ID_SERV).F_INICIO))} → ${esc(txtFecha(pausaDe(s.ID_SERV).F_FIN))} · ${pausaDe(s.ID_SERV).ESTADO === 'Activa' ? 'en curso' : 'programada'}</small>` : ''}</div>
+          <span class="chip ${claseEstado(s.ESTADO)}">${esc(s.ESTADO)}</span></div>
+          <div class="acc-serv">
           ${s.ESTADO === 'Activo' ? `<a class="mini" href="#/plan/${esc(s.ID_SERV)}">Cambiar plan</a>` : ''}
+          ${s.ESTADO === 'Activo' && !pausaDe(s.ID_SERV) ? `<a class="mini" href="#/pausa/${esc(s.ID_SERV)}">Pausar</a>` : ''}
+          ${pausaDe(s.ID_SERV) ? `<button class="mini verde" data-terminar="${esc(s.ID_SERV)}">${pausaDe(s.ID_SERV).ESTADO === 'Activa' ? 'Terminar pausa' : 'Cancelar pausa'}</button>` : ''}
           ${s.ESTADO === 'Activo' ? `<a class="mini rojo" href="#/corte/${esc(s.ID_SERV)}">Cortar</a>` : ''}
           ${s.ESTADO === 'Activo' && !s.PPPOE ? `<a class="mini" href="#/asignar/${esc(s.ID_SERV)}">Asignar PPPoE</a>` : ''}
-          ${s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido' ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
+          ${(s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido') && !pausaDe(s.ID_SERV) ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
         </div>`).join('') || '<p class="vacio">Sin servicios</p>'}
       ${bloqueRenovar(id, r)}
       <h3>Últimos pagos</h3>
@@ -247,6 +251,15 @@ async function vCliente(id) {
       <div id="zonaPdf"></div>
     </section>`;
   $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, plantilla('MsgCobranza', id));
+  vista().querySelectorAll('[data-terminar]').forEach((b) => { b.onclick = async () => {
+    const pa = pausaDe(b.dataset.terminar), enCurso = pa.ESTADO === 'Activa';
+    if (!(await confirmar(enCurso ? `El servicio vuelve a Activo hoy. Los días no usados (hasta el ${txtFecha(pa.F_FIN)}) se vuelven a cobrar.`
+      : `Se cancela la pausa del ${txtFecha(pa.F_INICIO)} al ${txtFecha(pa.F_FIN)} y se quita su descuento. No cuenta para el límite del año.`,
+      { titulo: enCurso ? '¿Terminar la pausa hoy?' : '¿Cancelar la pausa?', si: enCurso ? 'Terminar pausa' : 'Cancelar pausa', no: 'Volver' }))) return;
+    await encolar({ tipo: 'TERMINAR_PAUSA', idServ: b.dataset.terminar, idCliente: id, fecha: hoyISO(), motivo: enCurso ? 'Volvió antes' : 'Pausa cancelada' });
+    b.disabled = true;
+    aviso(navigator.onLine ? 'Enviado.' : 'Guardado: se enviará al volver la señal.');
+  }; });
   const bRen = $('#btnRenovar');
   if (bRen && !bRen.disabled) bRen.onclick = async () => {
     const anio = Number(bRen.dataset.anio);
@@ -701,7 +714,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -1065,6 +1078,78 @@ function vCambiarPlan(idServ) {
     await encolar({ tipo: 'CAMBIAR_PLAN', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, plan: $('#pl').value, tarifa: nueva(),
       fecha: $('#fec').value, datos: manual ? { prorrateo: true, ajuste: r2(ajuste) } : { prorrateo: true } });
     aviso(navigator.onLine ? 'Cambio de plan enviado.' : 'Guardado sin señal: se enviará al volver la conexión.');
+    location.hash = '#/cliente/' + s.ID_CLIENTE;
+  };
+}
+
+// ---- PAUSA TEMPORAL / SUSPENSIÓN VACACIONAL ------------------------------------------------
+// Máximo 60 días o 2 pausas por año calendario por cliente (lo que se cumpla primero).
+// Los días pausados no se cobran (descuento por días en la cuota de cada mes). El servidor vuelve a validar todo.
+const PAUSA_MAX_DIAS = 60, PAUSA_MAX_VECES = 2;
+const pausaDe = (idServ) => D.suspensiones.find((x) => x.ID_SERV === idServ && (x.ESTADO === 'Programada' || x.ESTADO === 'Activa'));
+const diasEntre = (a, b) => Math.round((Date.parse(String(b).slice(0, 10) + 'T00:00:00Z') - Date.parse(String(a).slice(0, 10) + 'T00:00:00Z')) / 864e5);
+function usoPausas(idCliente, anio) {
+  const l = D.suspensiones.filter((x) => x.ID_CLIENTE === idCliente && x.ESTADO !== 'Cancelada' && String(x.F_INICIO).startsWith(anio + '-'));
+  return { veces: l.length, dias: l.reduce((t, x) => t + (Number(x.DIAS) || 0), 0) };
+}
+
+function vPausa(idServ) {
+  const s = servicioPorId(idServ);
+  if (!s) { vista().innerHTML = '<p class="error">Servicio no encontrado.</p>'; return; }
+  if (s.ESTADO !== 'Activo') { vista().innerHTML = '<p class="aviso error">Solo se pausa un servicio Activo.</p>'; return; }
+  if (pausaDe(idServ)) { vista().innerHTML = '<p class="aviso">Este servicio ya tiene una pausa programada o en curso.</p>'; return; }
+  const hoy = hoyISO(), tarifa = Number(s.TARIFA) || 0;
+  vista().innerHTML = `<section class="form"><h2>Pausa vacacional</h2>
+    <p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.PLAN)} · ${soles(tarifa)}/mes</p>
+    <p class="aviso">${ic('alerta')}<span>Máximo ${PAUSA_MAX_DIAS} días o ${PAUSA_MAX_VECES} pausas por año, lo que se cumpla primero. Los días pausados no se cobran y el PPPoE queda reservado.</span></p>
+    <label>Fecha de inicio<input id="ini" type="date" value="${hoy}" min="${hoy}"></label>
+    <label>Fecha de reactivación (el día que vuelve)<input id="fin" type="date" min="${hoy}"></label>
+    <label>Motivo<input id="mot" value="Vacaciones" maxlength="200"></label>
+    <div id="resumenPausa"></div>
+    <button class="btn grande verde" id="ok">${ic('reloj')}Programar pausa</button>
+    <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
+  let valida = false;
+  const pintar = () => {
+    const ini = $('#ini').value, fin = $('#fin').value, cont = $('#resumenPausa');
+    valida = false;
+    if (!ini) { cont.innerHTML = ''; return; }
+    const anio = Number(ini.slice(0, 4)), uso = usoPausas(s.ID_CLIENTE, anio);
+    const lineaUso = `Uso en ${anio}: ${uso.veces} de ${PAUSA_MAX_VECES} pausas · ${uso.dias} de ${PAUSA_MAX_DIAS} días.`;
+    if (!fin) { cont.innerHTML = `<p class="sub">${lineaUso} Elija la fecha de reactivación.</p>`; return; }
+    const dias = diasEntre(ini, fin);
+    let error = '';
+    if (ini < hoy) error = 'La fecha de inicio no puede ser pasada.';
+    else if (dias <= 0) error = 'La reactivación debe ser posterior al inicio.';
+    else if (dias > PAUSA_MAX_DIAS) error = `Máximo ${PAUSA_MAX_DIAS} días por pausa (eligió ${dias}).`;
+    else if (uso.veces >= PAUSA_MAX_VECES) error = `LÍMITE ALCANZADO: ya tuvo ${uso.veces} pausas en ${anio}.`;
+    else if (uso.dias + dias > PAUSA_MAX_DIAS) error = `LÍMITE ALCANZADO: ya usó ${uso.dias} de ${PAUSA_MAX_DIAS} días en ${anio}. Le quedan ${PAUSA_MAX_DIAS - uso.dias} días.`;
+    if (error) { cont.innerHTML = `<p class="aviso error">${ic('alerta')}<span>${esc(error)}</span></p><p class="sub">${lineaUso}</p>`; return; }
+    // descuento estimado por mes (el servidor lo aplica sobre lo que falte pagar de cada cuota)
+    const meses = [];
+    let d = new Date(ini + 'T12:00:00Z');
+    const f = new Date(fin + 'T12:00:00Z');
+    while (d < f) {
+      const a = d.getUTCFullYear(), m = d.getUTCMonth(), diasMes = new Date(Date.UTC(a, m + 1, 0)).getUTCDate();
+      const sig = new Date(Date.UTC(a, m + 1, 1, 12)), hasta = sig < f ? sig : f;
+      const n = Math.round((hasta - d) / 864e5);
+      meses.push({ per: `${a}-${String(m + 1).padStart(2, '0')}`, n, diasMes, monto: n >= diasMes ? tarifa : r2(tarifa * n / diasMes) });
+      d = sig;
+    }
+    valida = true;
+    cont.innerHTML = `<div class="hero calculo"><span class="eyebrow">${dias} día(s) de pausa · del ${esc(txtFecha(ini))} al ${esc(txtFecha(fin))}</span>
+      <table class="periodos"><tbody>${meses.map((m) => `<tr><td>${esc(txtPeriodo(m.per))}: ${m.n} de ${m.diasMes} días sin cobrar</td><td>− ${soles(m.monto)}</td></tr>`).join('')}</tbody></table>
+      <div class="totalr">Descuento estimado <b>${soles(meses.reduce((t, m) => t + m.monto, 0))}</b></div>
+      <p class="sub">${ini === hoy ? 'El servicio se suspende hoy' : 'El servicio sigue Activo hasta el ' + esc(txtFecha(ini))} y vuelve solo el ${esc(txtFecha(fin))}.
+        Después de esta pausa: ${uso.veces + 1} de ${PAUSA_MAX_VECES} pausas · ${uso.dias + dias} de ${PAUSA_MAX_DIAS} días en ${anio}.</p></div>`;
+  };
+  ['#ini', '#fin'].forEach((x) => { $(x).onchange = pintar; $(x).oninput = pintar; });
+  pintar();
+  $('#ok').onclick = async () => {
+    if (!valida) return aviso('Revise las fechas de la pausa.', 'error');
+    const ini = $('#ini').value, fin = $('#fin').value;
+    if (!(await confirmar(`${s.CLIENTE}\nDel ${txtFecha(ini)} al ${txtFecha(fin)} (${diasEntre(ini, fin)} días)`, { titulo: '¿Programar la pausa vacacional?', si: 'Programar' }))) return;
+    await encolar({ tipo: 'PAUSA_VACACIONES', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, fecha: ini, motivo: $('#mot').value.trim() || 'Vacaciones', datos: { fin } });
+    aviso(navigator.onLine ? 'Pausa enviada.' : 'Guardada sin señal: se enviará al volver la conexión.');
     location.hash = '#/cliente/' + s.ID_CLIENTE;
   };
 }

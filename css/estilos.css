@@ -227,7 +227,10 @@ dd a .ic { width: 16px; height: 16px; }
 .secreto { font-family: var(--f-mono); font-size: var(--t-sm); background: var(--c-superficie-2); padding: 1px var(--e-1); border-radius: var(--r-xs); }
 .servicio { display: flex; justify-content: space-between; gap: var(--e-3); background: var(--c-superficie); padding: var(--e-4); border-radius: var(--r-lg); box-shadow: var(--s-1); margin-bottom: var(--e-2); }
 .servicio small { display: block; color: var(--c-tenue); margin-top: 2px; }
-.servicio .der { gap: var(--e-2); }
+.servicio { display: block; }
+.serv-cab { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--e-3); }
+.acc-serv { display: flex; flex-wrap: wrap; gap: var(--e-2); margin-top: var(--e-3); }
+.acc-serv:empty { display: none; }
 .aviso { display: flex; gap: var(--e-2); align-items: flex-start; background: var(--c-aviso-fondo); color: var(--c-aviso); padding: var(--e-3) var(--e-4); border-radius: var(--r-md); font-size: var(--t-sm); margin: var(--e-3) 0; }
 .aviso .ic { width: 18px; height: 18px; margin-top: 1px; }
 div.aviso { display: block; }
@@ -330,6 +333,8 @@ nav.inferior .insignia { position: absolute; top: 8px; left: calc(50% + 6px); mi
 /* ---- Varios --------------------------------------------------------------------------------------- */
 .pp { display: flex; justify-content: space-between; gap: var(--e-3); padding: var(--e-3) var(--e-4); width: 100%; }
 .pp .der { gap: var(--e-2); }
+.pausa-info { display: flex !important; align-items: center; gap: var(--e-1); color: var(--c-susp) !important; font-weight: var(--w-semi); }
+.pausa-info .ic { width: 14px; height: 14px; }
 .calculo { margin: var(--e-4) 0 0; padding: var(--e-4); }
 .calculo table { margin: var(--e-2) 0; }
 .calculo td:last-child { white-space: nowrap; }
