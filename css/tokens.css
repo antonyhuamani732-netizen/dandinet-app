@@ -1,0 +1,131 @@
+/* ==========================================================================
+   D@NDINET · TOKENS DE DISEÑO (fuente única de verdad)
+   --------------------------------------------------------------------------
+   Inspirado en la referencia "Stripe" (docs/DESIGN.md), adaptado al uso en campo:
+   - Tinta azul marino profunda (nunca negro puro) y UN solo color de acción (índigo).
+   - Pesos 400–700 (no 300): se leen bajo el sol.
+   - Cifras tabulares para dinero.
+   - Botones píldora con mínimo 44 px de alto (dedo).
+   - Modo claro por defecto y modo oscuro automático (prefers-color-scheme).
+   Todos los demás estilos (estilos.css) usan SOLO estas variables.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Marca y acción ------------------------------------------------------ */
+  --c-primario: #533afd;            /* acción principal (Cobrar, Guardar). Contraste con blanco 6.1:1 */
+  --c-primario-hover: #4434d4;
+  --c-primario-press: #2e2b8c;
+  --c-primario-suave: #eeebff;      /* fondos de selección / chips activos */
+  --c-sobre-primario: #ffffff;
+  --c-marca-oscura: #1c1e54;        /* barra superior */
+  --c-sobre-marca: #ffffff;
+
+  /* ---- Superficies ------------------------------------------------------------- */
+  --c-fondo: #f6f9fc;               /* lienzo de la app */
+  --c-superficie: #ffffff;          /* tarjetas, listas */
+  --c-superficie-2: #f0f4f9;        /* campos de solo lectura, filas alternas */
+  --c-superposicion: rgba(13, 37, 61, 0.48);   /* fondo de ventanas emergentes */
+
+  /* ---- Texto (todas ≥ 4.5:1 sobre --c-fondo y --c-superficie) ---------------- */
+  --c-tinta: #0d253d;
+  --c-tinta-2: #273951;
+  --c-tenue: #536580;               /* 5.6:1 sobre blanco */
+  --c-enlace: #4434d4;
+
+  /* ---- Bordes ---------------------------------------------------------------- */
+  --c-linea: #e3e8ee;               /* separadores */
+  --c-borde-campo: #7f91aa;         /* borde de inputs: 3.2:1 (mínimo para controles) */
+
+  /* ---- Estados del negocio (texto sobre su fondo ≥ 4.5:1) --------------------- */
+  --c-ok: #157030;        --c-ok-fondo: #e6f4ea;        /* Activo / Pagado / En línea (5.4:1) */
+  --c-aviso: #8a5a00;     --c-aviso-fondo: #fff4d6;     /* Por vencer / Parcial / Sin señal */
+  --c-peligro: #b42318;   --c-peligro-fondo: #fdecec;   /* Moroso / Vencido / Error */
+  --c-susp: #9a4a00;      --c-susp-fondo: #fff0e1;      /* Suspendido */
+  --c-neutro: #4a5a72;    --c-neutro-fondo: #eef1f5;    /* Cortado / Pendiente */
+  --c-baja: #2b3443;      --c-baja-fondo: #dde3ea;      /* Baja */
+  --c-ok-solido: #1a7f37; --c-peligro-solido: #c0362c;  /* rellenos (botón corte, deuda) */
+
+  /* ---- Tipografía (fuentes del sistema: rápidas y disponibles sin señal) ------- */
+  --f-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --f-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --t-xs: 0.8125rem;   /* 13 px · etiquetas, chips (mínimo legible en campo) */
+  --t-sm: 0.875rem;    /* 14 px · texto secundario */
+  --t-md: 1rem;        /* 16 px · cuerpo */
+  --t-lg: 1.125rem;    /* 18 px · botones grandes */
+  --t-xl: 1.375rem;    /* 22 px · títulos de pantalla */
+  --t-2xl: 1.75rem;    /* 28 px · montos destacados */
+  --t-3xl: 2.25rem;    /* 36 px · cifra principal */
+  --w-normal: 400; --w-medio: 500; --w-semi: 600; --w-negrita: 700;
+  --lh-ajustado: 1.15; --lh-normal: 1.45;
+  --track-titulo: -0.02em;          /* tracking negativo en títulos (rasgo Stripe) */
+
+  /* ---- Espaciado (escala de 4 px) -------------------------------------------- */
+  --e-1: 4px; --e-2: 8px; --e-3: 12px; --e-4: 16px; --e-5: 20px; --e-6: 24px; --e-8: 32px; --e-10: 40px; --e-12: 48px;
+
+  /* ---- Radios (más cerrados por dentro, más suaves por fuera) ------------------ */
+  --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-pildora: 9999px;
+
+  /* ---- Sombras (teñidas de azul, nunca negro puro) ----------------------------- */
+  --s-1: 0 1px 3px rgba(0, 55, 112, 0.08);
+  --s-2: 0 8px 24px rgba(0, 55, 112, 0.08), 0 2px 6px rgba(0, 55, 112, 0.04);
+  --s-3: 0 16px 40px rgba(0, 55, 112, 0.18);
+
+  /* ---- Interacción ------------------------------------------------------------ */
+  --foco: 0 0 0 3px rgba(83, 58, 253, 0.40);
+  --toque-min: 44px;
+  --dur: 160ms; --curva: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ---- Capas (escala única de z-index) ----------------------------------------- */
+  --z-barra: 10; --z-nav: 10; --z-toast: 30; --z-modal: 40;
+
+  /* ---- Diseño -------------------------------------------------------------------- */
+  --ancho-max: 680px;
+  --alto-nav: 64px;
+}
+
+/* ==== MODO OSCURO (automático según el celular) ================================ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --c-primario: #7b6bff;          /* con texto oscuro encima: 5.9:1 */
+    --c-primario-hover: #9284ff;
+    --c-primario-press: #a99eff;
+    --c-primario-suave: #26234d;
+    --c-sobre-primario: #0b1220;
+    --c-marca-oscura: #0f1730;
+    --c-sobre-marca: #e8edf7;
+
+    --c-fondo: #0b1220;
+    --c-superficie: #131c2e;
+    --c-superficie-2: #1a2539;
+    --c-superposicion: rgba(0, 0, 0, 0.6);
+
+    --c-tinta: #e8edf7;
+    --c-tinta-2: #c9d3e4;
+    --c-tenue: #9aa9c2;
+    --c-enlace: #a99eff;
+
+    --c-linea: #24304a;
+    --c-borde-campo: #5d6d89;
+
+    --c-ok: #4fc277;        --c-ok-fondo: #12301f;
+    --c-aviso: #f2c14e;     --c-aviso-fondo: #3a2e0c;
+    --c-peligro: #ff7b72;   --c-peligro-fondo: #3d1517;
+    --c-susp: #ffaa5c;      --c-susp-fondo: #3b2410;
+    --c-neutro: #a8b6cc;    --c-neutro-fondo: #212c40;
+    --c-baja: #c3cbd8;      --c-baja-fondo: #2a3446;
+    --c-ok-solido: #238a42; --c-peligro-solido: #b8352b;
+
+    --s-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --s-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --s-3: 0 16px 40px rgba(0, 0, 0, 0.6);
+    --foco: 0 0 0 3px rgba(123, 107, 255, 0.55);
+  }
+}
+
+/* ==== MOVIMIENTO REDUCIDO ======================================================= */
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur: 0ms; }
+}
