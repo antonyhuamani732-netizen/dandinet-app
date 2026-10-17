@@ -4,7 +4,7 @@
 import { kvGet } from './db.js';
 
 export const D = {
-  clientes: [], privados: {}, resumen: {}, servicios: [], cargos: [], pppoe: [], histPPPoE: [], suspensiones: [], planes: [], listas: [], pagos: [],
+  clientes: [], privados: {}, resumen: {}, servicios: [], cargos: [], pppoe: [], histPPPoE: [], suspensiones: [], ordenes: [], ordenesDet: [], planes: [], listas: [], pagos: [],
   config: {}, generado: null, porId: {},
 };
 
@@ -26,7 +26,11 @@ export function aplicar(s) {
   D.cargos = aObjetos(s.cargos);
   D.pppoe = aObjetos(s.pppoe);
   D.histPPPoE = aObjetos(s.histPPPoE);
-  D.suspensiones = aObjetos(s.suspensiones);   // pausas vacacionales (desde la v1.10)   // quién usó cada código (llega desde la v1.8)
+  D.suspensiones = aObjetos(s.suspensiones);
+  // órdenes de trabajo / hojas de ruta (desde la v1.11); DATOS y SNAPSHOT vienen como texto JSON
+  const json = (t) => { try { return JSON.parse(t || '{}'); } catch (e) { return {}; } };
+  D.ordenes = aObjetos(s.ordenes).map((o) => Object.assign(o, { DATOS: json(o.DATOS) }));
+  D.ordenesDet = aObjetos(s.ordenesDet).map((d) => Object.assign(d, { SNAPSHOT: json(d.SNAPSHOT) }));   // pausas vacacionales (desde la v1.10)   // quién usó cada código (llega desde la v1.8)
   D.planes = aObjetos(s.planes);
   D.listas = aObjetos(s.listas);
   D.pagos = aObjetos(s.pagos);

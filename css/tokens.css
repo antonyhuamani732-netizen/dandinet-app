@@ -84,6 +84,13 @@
   /* ---- Diseño -------------------------------------------------------------------- */
   --ancho-max: 680px;
   --alto-nav: 64px;
+
+  /* ---- Plantilla de documentos imprimibles (órdenes, hojas de ruta, reportes) --------
+     Los mismos colores del recibo PDF (ReciboDocs.gs). NO cambian con el tema: un
+     documento siempre se ve e imprime igual (fondo blanco). */
+  --doc-azul: #1F3A5F;  --doc-azul-2: #2C5282;  --doc-teal: #2A9D8F;  --doc-rojo: #C62828;
+  --doc-gris: #5F6B7A;  --doc-fondo: #F4F6F8;   --doc-tinta: #1A202C; --doc-linea: #D9DEE5;
+  --doc-amarillo: #FFD54F;  --doc-blanco: #FFFFFF;  --doc-zebra: #F7F9FB;
 }
 
 /* ==== MODO NOCHE ==================================================================

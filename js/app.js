@@ -118,7 +118,7 @@ function manejarErrorSync(e) {
 
 function refrescarSiCorresponde() {
   const h = location.hash || '#/';
-  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
+  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa|orden)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
 }
 
 let _avisoT = null;
@@ -136,7 +136,7 @@ function enrutar() {
   RUTA = ruta;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
-    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan, pausa: vPausa,
+    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos,
     mas: vMas, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
   cerrarModal();
@@ -150,6 +150,7 @@ async function vInicio() {
   const deuda = res.reduce((s, r) => s + Number(r.DEUDA_VENCIDA || 0), 0);
   const hoy = await cobrosDeHoy();
   const aCortar = n((r) => /CORTAR/.test(r.ALERTA || ''));
+  ordenesLocales._cache = await ordenesLocales();
   const pend = (await pendientesDeEnvio()).length;
   const h = new Date().getHours();
   const saludo = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches';
@@ -168,6 +169,7 @@ async function vInicio() {
       ${fila('#/cortar', 'cortar', 'Clientes a cortar', aCortar ? `<span class="cuenta alerta">${aCortar}</span>` : '')}
       ${fila('#/hoy', 'recibo', 'Mis cobros de hoy', `<span class="cuenta">${hoy.items.length}</span>`)}
       ${fila('#/cola', 'cola', 'Cola de envío', pend ? `<span class="cuenta alerta">${pend}</span>` : '')}
+      ${fila('#/ordenes', 'documento', 'Órdenes y hojas de ruta', (() => { const n = (ordenesLocales._cache || []).filter((o) => o.estado === 'Pendiente').length; return n ? `<span class="cuenta alerta">${n} pend.</span>` : ''; })())}
       ${fila('#/dashboard', 'grafico', 'Dashboard')}
     </ul>
     <button class="btn secundario" id="btnSync">${ic('sync')}Sincronizar ahora</button>`;
@@ -714,7 +716,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -766,7 +768,22 @@ async function vACortar() {
       <label>Orden<select id="fOrden">${opt('deuda-desc', 'Deuda: mayor a menor', f.orden)}${opt('deuda-asc', 'Deuda: menor a mayor', f.orden)}${opt('dias-desc', 'Atraso: mayor a menor', f.orden)}${opt('dias-asc', 'Atraso: menor a mayor', f.orden)}</select></label>
     </div>
     <p class="sub" id="cTotal"></p>
+    <button class="btn azul" id="btnRuta">${ic('mapa')}Generar hoja de ruta</button>
     <ul class="lista" id="cLista"></ul>`;
+  let actual = [];
+  $('#btnRuta').onclick = async () => {
+    const items = actual.flatMap((r) => D.servicios.filter((x) => x.ID_CLIENTE === r.ID_CLIENTE && x.ESTADO === 'Activo')
+      .map((x) => ({ idServ: x.ID_SERV, idCliente: r.ID_CLIENTE, snap: snapshotLocal(r.ID_CLIENTE, x.ID_SERV) })));
+    if (!items.length) return aviso('No hay servicios activos para cortar con estos filtros.', 'error');
+    if (items.length > 150) return aviso(`Son ${items.length} servicios: máximo 150 por hoja. Filtre por zona.`, 'error');
+    if (!(await confirmar(`${items.length} servicio(s) de ${actual.length} cliente(s)${f.zona ? ' · ' + f.zona : ''}.\nQueda PENDIENTE hasta marcar a cada cliente como cortado o no cortado.`,
+      { titulo: '¿Generar hoja de ruta de cortes?', si: 'Generar' }))) return;
+    const op = { tipo: 'CREAR_ORDEN', datos: { tipo: 'RUTA_CORTE', items: items.map((x) => ({ idServ: x.idServ, idCliente: x.idCliente })) },
+      vista: { tipo: 'RUTA_CORTE', datos: { zona: f.zona }, items } };
+    await encolar(op);
+    aviso(navigator.onLine ? 'Hoja de ruta enviada.' : 'Hoja guardada sin señal: ya puede imprimirla.');
+    location.hash = '#/orden/' + op.idSolicitud;
+  };
   const pintar = async () => {
     f.zona = $('#fZona').value; f.meses = Number($('#fMeses').value); f.orden = $('#fOrden').value;
     await kvSet('filtrosCortar', f);
@@ -774,6 +791,7 @@ async function vACortar() {
     const valor = (r) => Number(campo === 'deuda' ? r.DEUDA_VENCIDA : r.DIAS_ATRASO) || 0;
     const lista = todos.filter((r) => (!f.zona || r.ZONA === f.zona) && (Number(r.MESES_ADEUDA) || 0) >= f.meses)
       .sort((x, y) => (dir === 'asc' ? 1 : -1) * (valor(x) - valor(y)));
+    actual = lista;
     const suma = lista.reduce((t, r) => t + Number(r.DEUDA_VENCIDA || 0), 0);
     $('#cTotal').textContent = `${lista.length} cliente(s) · deuda vencida ${soles(suma)}`;
     $('#cLista').innerHTML = lista.map((r) => `<li><a href="#/cliente/${esc(r.ID_CLIENTE)}"><div><b>${esc(r.NOMBRES)}</b>
@@ -844,6 +862,8 @@ function vMas() {
     <ul class="menu">
       ${fila('#/dashboard', 'grafico', 'Dashboard', 'Recaudación, morosidad y ranking')}
       ${fila('#/cortar', 'cortar', 'A cortar', 'Clientes con 30 días o más de atraso')}
+      ${fila('#/ordenes', 'documento', 'Órdenes y hojas de ruta', 'Imprimir, completar y revisar por fechas')}
+      ${fila('#/movimientos', 'reloj', 'Reporte de movimientos', 'Cortes, pausas, cambios de plan… por mes')}
       ${fila('#/pppoe', 'router', 'PPPoE', 'Códigos disponibles, asignados y bloqueados')}
       ${fila('#/hoy', 'recibo', 'Mis cobros de hoy', 'Total del día por método')}
     </ul>
@@ -1036,6 +1056,7 @@ function vCambiarPlan(idServ) {
     <label>Tarifa nueva (S/ al mes)<input id="tar" type="number" step="0.10" inputmode="decimal"></label>
     <label>Fecha del cambio<input id="fec" type="date" value="${hoyISO()}"></label>
     <div id="calc"></div>
+    <label class="check"><input type="checkbox" id="conOt" checked> Requiere visita técnica: generar <b>orden de trabajo</b> (el plan cambia cuando se marque como completada)</label>
     <label class="check"><input type="checkbox" id="manual"> Modificar el monto del ajuste manualmente</label>
     <div id="manualWrap" hidden><label>Monto del ajuste a cobrar (S/)<div class="fila"><input id="aj" type="number" step="0.10" inputmode="decimal">
       <button type="button" class="mini" id="redondear">Redondear</button></div></label>
@@ -1074,6 +1095,18 @@ function vCambiarPlan(idServ) {
     const texto = `${s.PLAN} ${soles(actual)} → ${$('#pl').value} ${soles(nueva())}\nDesde el ${txtFecha($('#fec').value)}\n` +
       (ajuste > 0 ? `Cargo aparte AJUSTE PLAN: ${soles(ajuste)}` : ajuste < 0 ? `Descuento en la cuota del mes: ${soles(-ajuste)}` : 'Sin ajuste en el mes del cambio') +
       (manual && r2(ajuste) !== calc.ajuste ? `\n(sugerido ${soles(calc.ajuste)})` : '');
+    if ($('#conOt').checked) {
+      if (!(await confirmar(texto.split('\n')[0] + '\nQueda PENDIENTE DE INSTALACIÓN. El cambio y el prorrateo se aplican con la fecha en que se marque completada.' +
+        (manual ? `\nAjuste fijado a mano: ${soles(ajuste)}` : ''), { titulo: '¿Generar orden de trabajo?', si: 'Generar orden' }))) return;
+      const op = { tipo: 'CREAR_ORDEN', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, plan: $('#pl').value, tarifa: nueva(),
+        datos: manual ? { tipo: 'CAMBIO_PLAN', ajuste: r2(ajuste) } : { tipo: 'CAMBIO_PLAN' },
+        vista: { tipo: 'CAMBIO_PLAN', datos: { planAnt: s.PLAN, tarifaAnt: actual, plan: $('#pl').value, tarifa: nueva(), ajuste: manual ? r2(ajuste) : undefined },
+          items: [{ idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, snap: snapshotLocal(s.ID_CLIENTE, s.ID_SERV) }] } };
+      await encolar(op);
+      aviso(navigator.onLine ? 'Orden de trabajo enviada.' : 'Orden guardada sin señal: ya puede imprimirla.');
+      location.hash = '#/orden/' + op.idSolicitud;
+      return;
+    }
     if (!(await confirmar(texto, { titulo: '¿Registrar el cambio de plan?', si: 'Registrar' }))) return;
     await encolar({ tipo: 'CAMBIAR_PLAN', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, plan: $('#pl').value, tarifa: nueva(),
       fecha: $('#fec').value, datos: manual ? { prorrateo: true, ajuste: r2(ajuste) } : { prorrateo: true } });
@@ -1152,6 +1185,297 @@ function vPausa(idServ) {
     aviso(navigator.onLine ? 'Pausa enviada.' : 'Guardada sin señal: se enviará al volver la conexión.');
     location.hash = '#/cliente/' + s.ID_CLIENTE;
   };
+}
+
+// ============================================================================
+// ÓRDENES DE TRABAJO Y HOJAS DE RUTA (registro, documento imprimible, acciones del técnico)
+// ============================================================================
+const OT_TITULO = { CAMBIO_PLAN: 'ORDEN DE TRABAJO', RUTA_CORTE: 'HOJA DE RUTA DE CORTES' };
+const OT_NOMBRE = { CAMBIO_PLAN: 'Orden de trabajo · cambio de plan', RUTA_CORTE: 'Hoja de ruta de cortes' };
+const chipOt = (e) => ({ Pendiente: 'e-porvencer', Completada: 'e-activo', Anulada: 'e-baja', Ejecutado: 'e-activo', 'No ejecutado': 'e-cortado', Anulado: 'e-baja' }[e] || 'e-pend');
+const enlaceMapa = (gps) => 'https://maps.google.com/?q=' + encodeURIComponent(String(gps).replace(/\s+/g, ''));
+
+/** Foto local de los datos del cliente (mismas claves que el servidor) para imprimir aunque no haya señal. */
+function snapshotLocal(idCli, idServ) {
+  const c = D.porId[idCli] || {}, sv = servicioPorId(idServ) || {}, r = D.resumen[idCli] || {};
+  return { n: c.NOMBRES || sv.CLIENTE || '', doc: c.DNI_RUC || '', tel: c.TELEFONO || '', tel2: c.TELEFONO2 || '', dir: c.DIRECCION || '',
+    ref: c.REFERENCIA || '', zona: c.ZONA || '', gps: c.COORDENADAS || '', plan: sv.PLAN || '', tarifa: Number(sv.TARIFA) || 0, modo: sv.MODO || '',
+    pppoe: sv.PPPOE || '', estado: sv.ESTADO || '', deuda: Number(r.DEUDA_VENCIDA) || 0, meses: Number(r.MESES_ADEUDA) || 0, dias: Number(r.DIAS_ATRASO) || 0 };
+}
+
+/**
+ * Todas las órdenes que conoce el celular: las sincronizadas + las creadas aquí que aún no llegaron,
+ * con las marcas (ejecutado / no ejecutado / anulada) que están en la cola de envío.
+ */
+async function ordenesLocales() {
+  const cola = await colaTodos();
+  const vivas = (o) => ['pendiente', 'enviado', 'error'].includes(o.estadoLocal);
+  const lista = D.ordenes.map((o) => ({
+    ref: o.ID_OT, id: o.ID_OT, solicitud: o.ID_SOLICITUD, tipo: o.TIPO, estado: o.ESTADO, fecha: o.F_CREACION, usuario: o.USUARIO,
+    detalle: o.DETALLE, datos: o.DATOS || {}, cierre: o.F_CIERRE, obsCierre: o.OBS_CIERRE, local: false,
+    items: D.ordenesDet.filter((d) => d.ID_OT === o.ID_OT).map((d) => ({ idServ: d.ID_SERV, idCliente: d.ID_CLIENTE, estado: d.ESTADO,
+      snap: d.SNAPSHOT || {}, obs: d.OBS, fEjec: d.F_EJEC })),
+  }));
+  const conocidas = new Set(lista.map((o) => o.solicitud).filter(Boolean));
+  cola.filter((o) => o.tipo === 'CREAR_ORDEN' && o.estadoLocal !== 'rechazado' && !conocidas.has(o.idSolicitud) && o.vista).forEach((o) => {
+    const res = o.resultado || {};
+    lista.push({ ref: o.idSolicitud, id: (res.datos && res.datos.idOt) || 'PROVISIONAL', solicitud: o.idSolicitud, tipo: o.vista.tipo, estado: 'Pendiente',
+      fecha: o.fDispositivo, usuario: PERFIL.email, detalle: o.vista.tipo === 'RUTA_CORTE' ? o.vista.items.length + ' cliente(s) a cortar'
+        : `${o.vista.datos.planAnt} → ${o.vista.datos.plan}`, datos: o.vista.datos || {}, local: true,
+      items: o.vista.items.map((x) => ({ idServ: x.idServ, idCliente: x.idCliente, estado: 'Pendiente', snap: x.snap })) });
+  });
+  // marcas aún sin enviar
+  cola.filter((o) => vivas(o) && (o.tipo === 'CERRAR_ITEM_ORDEN' || o.tipo === 'ANULAR_ORDEN')).forEach((op) => {
+    const ot = lista.find((x) => x.ref === op.datos.ref || x.solicitud === op.datos.ref || x.id === op.datos.ref);
+    if (!ot) return;
+    if (op.tipo === 'ANULAR_ORDEN') { ot.estado = 'Anulada'; ot.sinEnviar = true; ot.items.forEach((it) => { if (it.estado === 'Pendiente') it.estado = 'Anulado'; }); return; }
+    const it = ot.items.find((x) => x.idServ === op.idServ);
+    if (it && it.estado === 'Pendiente') { it.estado = op.datos.resultado === 'EJECUTADO' ? 'Ejecutado' : 'No ejecutado'; it.obs = op.motivo || ''; it.fEjec = op.fecha; it.sinEnviar = true; }
+    if (ot.estado === 'Pendiente' && ot.items.every((x) => x.estado !== 'Pendiente')) ot.estado = 'Completada';
+  });
+  return lista.sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+}
+
+// ---- REGISTRO: filtros por fechas; las pendientes siempre visibles --------------------------
+async function vOrdenes() {
+  const hoy = hoyISO(), f = Object.assign({ desde: hoy.slice(0, 8) + '01', hasta: hoy, tipo: '', estado: '' }, (await kvGet('filtrosOrdenes')) || {});
+  const opt = (v, t, sel) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(t)}</option>`;
+  vista().innerHTML = `<h2>Órdenes y hojas de ruta</h2>
+    <p class="sub">Las pendientes aparecen siempre, hasta que se completen o se anulen.</p>
+    <div class="filtros">
+      <label>Desde<input id="oDesde" type="date" value="${esc(f.desde)}"></label>
+      <label>Hasta<input id="oHasta" type="date" value="${esc(f.hasta)}"></label>
+      <label>Tipo<select id="oTipo">${opt('', 'Todos', f.tipo)}${opt('CAMBIO_PLAN', 'Órdenes de trabajo', f.tipo)}${opt('RUTA_CORTE', 'Hojas de ruta', f.tipo)}</select></label>
+      <label>Estado<select id="oEstado">${opt('', 'Todos', f.estado)}${opt('Pendiente', 'Pendientes', f.estado)}${opt('Completada', 'Completadas', f.estado)}${opt('Anulada', 'Anuladas', f.estado)}</select></label>
+    </div>
+    <div id="oLista"></div>`;
+  const fila = (o) => {
+    const hechos = o.items.filter((x) => x.estado !== 'Pendiente').length;
+    return `<li><a href="#/orden/${encodeURIComponent(o.ref)}"><div><b>${esc(o.id)}</b> · ${esc(OT_NOMBRE[o.tipo] || o.tipo)}
+      <small>${esc(txtFecha(o.fecha))} ${esc(String(o.fecha).slice(11, 16))} · ${esc(o.detalle)}</small>
+      <small>${hechos} de ${o.items.length} resuelto(s)${o.local ? ' · sin enviar' : ''}</small></div>
+      <div class="der"><span class="chip ${chipOt(o.estado)}">${esc(o.estado)}</span></div></a></li>`;
+  };
+  const pintar = async () => {
+    Object.assign(f, { desde: $('#oDesde').value, hasta: $('#oHasta').value, tipo: $('#oTipo').value, estado: $('#oEstado').value });
+    await kvSet('filtrosOrdenes', f);
+    const todas = (await ordenesLocales()).filter((o) => !f.tipo || o.tipo === f.tipo);
+    const pend = todas.filter((o) => o.estado === 'Pendiente');
+    const dia = (o) => String(o.fecha).slice(0, 10);
+    const periodo = todas.filter((o) => o.estado !== 'Pendiente' && (!f.estado || o.estado === f.estado) && (!f.desde || dia(o) >= f.desde) && (!f.hasta || dia(o) <= f.hasta));
+    $('#oLista').innerHTML = (!f.estado || f.estado === 'Pendiente' ? `<h3>Pendientes (${pend.length})</h3>
+      <ul class="lista">${pend.map(fila).join('') || '<li class="vacio">No hay órdenes pendientes.</li>'}</ul>` : '') +
+      (f.estado !== 'Pendiente' ? `<h3>Cerradas del ${esc(txtFecha(f.desde))} al ${esc(txtFecha(f.hasta))} (${periodo.length})</h3>
+      <ul class="lista">${periodo.map(fila).join('') || '<li class="vacio">Nada en esas fechas.</li>'}</ul>` : '');
+  };
+  ['#oDesde', '#oHasta', '#oTipo', '#oEstado'].forEach((x) => { $(x).onchange = pintar; });
+  pintar();
+}
+
+/** HTML del documento (misma plantilla que el recibo PDF). */
+function htmlDocumento(o, logo = 'icons/icono-192.png') {
+  const cfg = D.config, t = (v) => esc(v || '—');
+  const cab1 = [cfg.RUC ? 'RUC: ' + cfg.RUC : '', cfg.Direccion].filter(Boolean).join('  ·  ');
+  const cab2 = [cfg.Telefono ? 'Cel.: ' + cfg.Telefono : '', cfg.Email].filter(Boolean).join('  ·  ');
+  const total = o.items.reduce((s, x) => s + (Number(x.snap.deuda) || 0), 0);
+  const tels = (sn) => [sn.tel, sn.tel2].filter(Boolean).map((x) => `<a href="tel:${esc(x)}">${esc(x)}</a>`).join(' / ') || '—';
+  const ubic = (sn) => sn.gps ? `<a class="mapa-link" href="${enlaceMapa(sn.gps)}" target="_blank" rel="noopener">${esc(sn.gps)} · Abrir en Google Maps</a>` : 'Sin coordenadas';
+  const cabecera = `<header class="doc-cab"><img src="${logo}" alt="" width="52" height="52">
+    <div class="doc-neg"><b>${esc(cfg.Negocio || 'D@NDINET')}</b>${cab1 ? `<small>${esc(cab1)}</small>` : ''}${cab2 ? `<small>${esc(cab2)}</small>` : ''}</div>
+    <div class="doc-caja"><span>${OT_TITULO[o.tipo] || 'DOCUMENTO'}</span><strong>N° ${esc(o.id)}</strong><span>Fecha: ${esc(txtFecha(o.fecha))}</span>
+      <em>${o.estado === 'Pendiente' ? 'PENDIENTE' : esc(o.estado.toUpperCase())}</em></div></header>`;
+  let cuerpo = '';
+  if (o.tipo === 'CAMBIO_PLAN') {
+    const sn = (o.items[0] || {}).snap || {}, d = o.datos || {};
+    cuerpo = `<table class="doc-campos"><tbody>
+        <tr><th>Cliente</th><td><b>${t(sn.n)}</b></td></tr><tr><th>Código</th><td>${t((o.items[0] || {}).idCliente)} · DNI/RUC ${t(sn.doc)}</td></tr>
+        <tr><th>Teléfono</th><td>${tels(sn)}</td></tr><tr><th>Dirección</th><td>${t(sn.dir)}</td></tr><tr><th>Referencia</th><td>${t(sn.ref)}</td></tr>
+        <tr><th>Zona</th><td>${t(sn.zona)}</td></tr><tr><th>Ubicación</th><td>${ubic(sn)}</td></tr>
+        <tr><th>PPPoE</th><td>${t(sn.pppoe)} · Equipo: ${t(sn.modo)}</td></tr></tbody></table>
+      <h4 class="doc-sec">DETALLE DEL TRABAJO · CAMBIO DE PLAN / TECNOLOGÍA</h4>
+      <table class="doc-det"><thead><tr><th></th><th>Plan</th><th>Tarifa</th></tr></thead><tbody>
+        <tr><td>Actual</td><td>${t(d.planAnt || sn.plan)}</td><td>${soles(d.tarifaAnt || sn.tarifa)}</td></tr>
+        <tr><td><b>Nuevo</b></td><td><b>${t(d.plan)}</b></td><td><b>${soles(d.tarifa)}</b></td></tr></tbody></table>
+      <p class="doc-nota">El cambio se aplica el día de la instalación, con prorrateo por días${d.ajuste !== undefined ? ` (ajuste fijado: ${soles(d.ajuste)})` : ''}.</p>
+      ${o.items[0] && o.items[0].estado !== 'Pendiente' ? `<p class="doc-resultado">${esc(o.items[0].estado)} el ${esc(txtFecha(o.items[0].fEjec))}${o.items[0].obs ? ' · ' + esc(o.items[0].obs) : ''}</p>` : ''}
+      <div class="doc-firmas"><div>Fecha de instalación: ____ / ____ / ______</div><div>Observaciones: ______________________</div>
+        <div class="firma">Firma del técnico</div><div class="firma">Firma del cliente</div></div>`;
+  } else {
+    const zonas = [...new Set(o.items.map((x) => x.snap.zona).filter(Boolean))];
+    cuerpo = `<div class="doc-resumen"><div><span>Clientes</span><b>${o.items.length}</b></div><div><span>Zona(s)</span><b>${esc(zonas.join(', ') || '—')}</b></div>
+        <div class="doc-total"><span>Deuda total</span><b>${soles(total)}</b></div></div>
+      ${o.items.map((it, i) => { const sn = it.snap || {}; return `<article class="doc-item">
+        <h4><span>${i + 1}. ${t(sn.n)} <small>(${esc(it.idCliente)} · ${esc(it.idServ)})</small></span><span class="doc-estado ${chipOt(it.estado)}">${esc(it.estado)}</span></h4>
+        <table class="doc-campos"><tbody>
+          <tr><th>Dirección</th><td>${t(sn.dir)}</td></tr><tr><th>Referencia</th><td>${t(sn.ref)}</td></tr>
+          <tr><th>Zona · Plan</th><td>${t(sn.zona)} · ${t(sn.plan)} (${soles(sn.tarifa)})</td></tr><tr><th>PPPoE</th><td>${t(sn.pppoe)}</td></tr>
+          <tr><th>Teléfono</th><td>${tels(sn)}</td></tr><tr><th>Ubicación</th><td>${ubic(sn)}</td></tr>
+          <tr><th>Deuda</th><td><b class="doc-rojo">${soles(sn.deuda)}</b> · ${Number(sn.meses) || 0} cuota(s) · ${esc(txtMora(sn.dias))} de atraso</td></tr></tbody></table>
+        ${it.estado !== 'Pendiente' ? `<p class="doc-resultado">${esc(it.estado)}${it.fEjec ? ' el ' + esc(txtFecha(it.fEjec)) : ''}${it.obs ? ' · ' + esc(it.obs) : ''}</p>`
+          : '<p class="doc-casillas">☐ Cortado &nbsp; ☐ No cortado &nbsp; Motivo / obs.: ________________________</p>'}
+        <div class="no-imprimir acc-item" data-serv="${esc(it.idServ)}"></div></article>`; }).join('')}
+      <div class="doc-firmas"><div class="firma">Firma del técnico</div><div class="firma">V.° B.° administración</div></div>`;
+  }
+  return `<div class="doc">${cabecera}${cuerpo}
+    <footer class="doc-pie">Documento interno de control ${esc(cfg.Negocio || 'D@NDINET')}. Generado por ${esc(o.usuario || '')} el ${esc(txtFecha(o.fecha))} ${esc(String(o.fecha).slice(11, 16))}.
+      ${o.local ? 'N° provisional: el número definitivo se asigna al sincronizar.' : ''}</footer></div>`;
+}
+
+/** Texto para compartir por WhatsApp (con los enlaces de Google Maps). */
+function textoOrden(o) {
+  const l = [`*${OT_TITULO[o.tipo]} ${o.id}* (${txtFecha(o.fecha)})`];
+  o.items.forEach((it, i) => {
+    const sn = it.snap || {};
+    l.push(`\n${o.tipo === 'RUTA_CORTE' ? (i + 1) + '. ' : ''}*${sn.n}* (${it.idCliente})`, `Dirección: ${sn.dir || '—'}${sn.ref ? ' (Ref.: ' + sn.ref + ')' : ''}`,
+      `Zona: ${sn.zona || '—'} · Plan: ${sn.plan || '—'} · PPPoE: ${sn.pppoe || '—'}`, `Tel.: ${[sn.tel, sn.tel2].filter(Boolean).join(' / ') || '—'}`);
+    if (sn.gps) l.push(`Mapa: ${enlaceMapa(sn.gps)}`);
+    if (o.tipo === 'RUTA_CORTE') l.push(`Deuda: ${soles(sn.deuda)} (${txtMora(sn.dias)})`);
+  });
+  if (o.tipo === 'CAMBIO_PLAN') l.push(`\nCambio: ${o.datos.planAnt || ''} → *${o.datos.plan || ''}* (${soles(o.datos.tarifa)})`);
+  return l.join('\n');
+}
+
+/** Descarga el documento como archivo .html (se abre sin internet en cualquier navegador). */
+async function descargarDocumento(o) {
+  const txt = async (u) => { try { return await (await fetch(u)).text(); } catch (e) { return ''; } };
+  let logo = 'icons/icono-192.png';
+  try {
+    const b = await (await fetch(logo)).blob();
+    logo = await new Promise((ok) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b); });
+  } catch (e) { /* sin logo */ }
+  const css = (await txt('css/tokens.css')) + '\n' + (await txt('css/estilos.css'));
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${esc(OT_TITULO[o.tipo])} ${esc(o.id)}</title><style>${css}\nbody{background:#fff;padding:16px}.no-imprimir{display:none!important}</style></head>
+    <body>${htmlDocumento(o, logo)}</body></html>`;
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = `${o.tipo === 'RUTA_CORTE' ? 'HojaRuta' : 'OrdenTrabajo'}_${o.id}_${String(o.fecha).slice(0, 10)}.html`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// ---- DOCUMENTO: ver, imprimir / guardar PDF, compartir, descargar, marcar ---------------------
+async function vOrden(ref) {
+  const o = (await ordenesLocales()).find((x) => x.ref === ref || x.id === ref || x.solicitud === ref);
+  if (!o) { vista().innerHTML = '<p class="error">Orden no encontrada. Sincronice e intente de nuevo.</p><a class="btn" href="#/ordenes">Volver</a>'; return; }
+  const refEnvio = o.local ? o.solicitud : o.id;
+  vista().innerHTML = `<div class="no-imprimir barra-doc">
+      <a class="mini" href="#/ordenes">${ic('atras')}Registro</a>
+      <button class="mini" id="dImprimir">${ic('descargar')}Imprimir / PDF</button>
+      <button class="mini" id="dCompartir">${ic('compartir')}Compartir</button>
+      <button class="mini" id="dDescargar">${ic('documento')}Descargar</button>
+      ${o.estado === 'Pendiente' ? `<button class="mini rojo" id="dAnular">${ic('anular')}Anular</button>` : ''}
+    </div>
+    ${o.local ? '<p class="aviso no-imprimir">Orden sin enviar: el N° definitivo llegará al sincronizar. Ya puede imprimirla y trabajar con ella.</p>' : ''}
+    ${o.sinEnviar ? '<p class="aviso no-imprimir">Hay marcas sin enviar en esta orden.</p>' : ''}
+    ${htmlDocumento(o)}
+    ${o.tipo === 'CAMBIO_PLAN' && o.items[0] && o.items[0].estado === 'Pendiente' && o.estado === 'Pendiente' ? `<section class="no-imprimir form cierre-ot">
+      <h3>Completar instalación</h3>
+      <label>Fecha de instalación<input id="dFecha" type="date" value="${hoyISO()}" max="${hoyISO()}"></label>
+      <button class="btn grande verde" id="dCompletar">${ic('check')}Marcar como completada</button>
+      <button class="btn" id="dNoEjec">No se pudo instalar</button></section>` : ''}`;
+  // acciones por cliente en la hoja de ruta (no se imprimen)
+  vista().querySelectorAll('.acc-item').forEach((div) => {
+    const it = o.items.find((x) => x.idServ === div.dataset.serv), r = D.resumen[it.idCliente] || {};
+    if (it.estado !== 'Pendiente' || o.estado !== 'Pendiente') { div.remove(); return; }
+    const pagó = Number(r.DEUDA_VENCIDA) === 0 && Number(it.snap.deuda) > 0;
+    div.innerHTML = `${pagó ? '<p class="aviso">Ya no tiene deuda vencida: probablemente pagó.</p>' : ''}
+      <button class="mini rojo" data-r="EJECUTADO">${ic('cortar')}Cortado</button><button class="mini" data-r="NO_EJECUTADO">No cortado</button>
+      <a class="mini" href="#/cliente/${esc(it.idCliente)}">Ficha</a>`;
+    div.querySelectorAll('[data-r]').forEach((b) => { b.onclick = async () => {
+      let motivo = '';
+      if (b.dataset.r === 'EJECUTADO') {
+        if (!(await confirmar(`${it.snap.n} (${it.idServ})\nSe registra el corte con fecha de hoy y se libera el PPPoE.`, { titulo: '¿Cortado?', si: 'Sí, cortado', peligro: true }))) return;
+      } else {
+        const m = await pedirTexto('¿Por qué no se cortó? (ej.: pagó, no estaba, sin acceso)', { titulo: it.snap.n, si: 'Guardar', valor: pagó ? 'Pagó' : '' });
+        if (m === null) return;
+        motivo = m.trim();
+        if (motivo.length < 3) return aviso('Escriba el motivo.', 'error');
+      }
+      await encolar({ tipo: 'CERRAR_ITEM_ORDEN', idServ: it.idServ, idCliente: it.idCliente, fecha: hoyISO(), motivo, datos: { ref: refEnvio, resultado: b.dataset.r } });
+      aviso(navigator.onLine ? 'Enviado.' : 'Guardado: se enviará al volver la señal.');
+      vOrden(ref);
+    }; });
+  });
+  $('#dImprimir').onclick = () => window.print();
+  $('#dDescargar').onclick = () => descargarDocumento(o);
+  $('#dCompartir').onclick = async () => {
+    const texto = textoOrden(o);
+    if (navigator.share) { try { await navigator.share({ title: OT_TITULO[o.tipo] + ' ' + o.id, text: texto }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+    window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
+  };
+  if ($('#dAnular')) $('#dAnular').onclick = async () => {
+    const m = await pedirTexto('Motivo de la anulación (los clientes pendientes no se tocan):', { titulo: `Anular ${o.id}`, si: 'Anular', peligro: true });
+    if (m === null) return;
+    if (m.trim().length < 3) return aviso('Escriba el motivo.', 'error');
+    await encolar({ tipo: 'ANULAR_ORDEN', motivo: m.trim(), datos: { ref: refEnvio } });
+    aviso(navigator.onLine ? 'Anulación enviada.' : 'Guardada: se enviará al volver la señal.');
+    vOrden(ref);
+  };
+  if ($('#dCompletar')) {
+    const it = o.items[0];
+    $('#dCompletar').onclick = async () => {
+      const fe = $('#dFecha').value || hoyISO();
+      if (!(await confirmar(`${it.snap.n}\n${o.datos.planAnt || ''} → ${o.datos.plan} (${soles(o.datos.tarifa)})\nInstalado el ${txtFecha(fe)}: se aplica el cambio con prorrateo.`,
+        { titulo: '¿Instalación completada?', si: 'Completar' }))) return;
+      await encolar({ tipo: 'CERRAR_ITEM_ORDEN', idServ: it.idServ, idCliente: it.idCliente, fecha: fe, motivo: '', datos: { ref: refEnvio, resultado: 'EJECUTADO' } });
+      aviso(navigator.onLine ? 'Enviado: el plan se actualizará en segundos.' : 'Guardado: se enviará al volver la señal.');
+      vOrden(ref);
+    };
+    $('#dNoEjec').onclick = async () => {
+      const m = await pedirTexto('¿Por qué no se pudo instalar?', { titulo: it.snap.n, si: 'Guardar' });
+      if (m === null) return;
+      if (m.trim().length < 3) return aviso('Escriba el motivo.', 'error');
+      await encolar({ tipo: 'CERRAR_ITEM_ORDEN', idServ: it.idServ, idCliente: it.idCliente, fecha: hoyISO(), motivo: m.trim(), datos: { ref: refEnvio, resultado: 'NO_EJECUTADO' } });
+      aviso('Guardado. La orden queda cerrada sin cambiar el plan.');
+      vOrden(ref);
+    };
+  }
+}
+
+// ---- REPORTE DE MOVIMIENTOS (mes y año, tipo, zona) -------------------------------------------
+async function vMovimientos() {
+  const hoy = hoyISO(), f = Object.assign({ anio: Number(hoy.slice(0, 4)), mes: Number(hoy.slice(5, 7)), tipo: '', zona: '' }, (await kvGet('filtrosMov')) || {});
+  const opt = (v, t, sel) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(t)}</option>`;
+  const tipos = ['Corte', 'Suspensión', 'Pausa vacacional', 'Cambio de plan', 'Reactivación', 'Baja', 'Alta', 'Renovación', 'Orden de trabajo', 'Hoja de ruta', 'Otro'];
+  const zonas = [...new Set(D.clientes.map((c) => c.ZONA).filter(Boolean))].sort();
+  const a0 = Number(hoy.slice(0, 4));
+  vista().innerHTML = `<h2>Reporte de movimientos</h2>
+    <div class="filtros no-imprimir">
+      <label>Año<select id="mA">${[a0 - 2, a0 - 1, a0].map((a) => opt(a, a, f.anio)).join('')}</select></label>
+      <label>Mes<select id="mM">${opt(0, 'Todo el año', f.mes)}${MESES_TXT.map((m, i) => opt(i + 1, m, f.mes)).join('')}</select></label>
+      <label>Tipo<select id="mT">${opt('', 'Todos', f.tipo)}${tipos.map((t) => opt(t, t, f.tipo)).join('')}</select></label>
+      <label>Zona<select id="mZ">${opt('', 'Todas', f.zona)}${zonas.map((z) => opt(z, z, f.zona)).join('')}</select></label>
+    </div>
+    <button class="btn no-imprimir" id="mImprimir">${ic('descargar')}Imprimir / PDF</button>
+    <div id="mRes"><p class="aviso">Cargando…</p></div>`;
+  const pintar = (d, cache) => {
+    const per = (d.filtros.mes ? MESES_TXT[d.filtros.mes - 1] + ' ' : '') + d.filtros.anio;
+    $('#mRes').innerHTML = `<p class="sub">${esc(per)}${d.filtros.tipo ? ' · ' + esc(d.filtros.tipo) : ''}${d.filtros.zona ? ' · ' + esc(d.filtros.zona) : ''} ·
+        ${d.total} movimiento(s)${cache ? ' (guardado, actualizando…)' : ''}${d.recortado ? ' · se muestran los 1500 más recientes' : ''}</p>
+      <div class="chips no-imprimir">${Object.entries(d.resumen).sort((a, b) => b[1] - a[1]).map(([t, n]) =>
+        `<button class="mini ${t === d.filtros.tipo ? 'sel' : ''}" data-tipo="${esc(t)}">${esc(t)} (${n})</button>`).join('')}</div>
+      <ul class="lista">${d.filas.map((x) => `<li><a href="#/cliente/${esc(x.id)}"><div><b>${esc(x.cliente)}</b>
+        <small>${esc(txtFecha(x.fecha))} · ${esc(x.id)}${x.serv ? ' · ' + esc(x.serv) : ''} · ${esc(x.zona)}</small><small>${esc(x.detalle)}</small></div>
+        <div class="der"><span class="chip ${({ Corte: 'e-moroso', Baja: 'e-baja', Suspensión: 'e-susp', 'Pausa vacacional': 'e-susp', Reactivación: 'e-activo', Alta: 'e-activo' })[x.tipo] || 'e-pend'}">${esc(x.tipo)}</span></div></a></li>`).join('')
+        || '<li class="vacio">Sin movimientos con estos filtros.</li>'}</ul>`;
+    $('#mRes').querySelectorAll('[data-tipo]').forEach((b) => { b.onclick = () => { $('#mT').value = b.dataset.tipo === d.filtros.tipo ? '' : b.dataset.tipo; cargar(); }; });
+  };
+  const cargar = async () => {
+    Object.assign(f, { anio: Number($('#mA').value), mes: Number($('#mM').value), tipo: $('#mT').value, zona: $('#mZ').value });
+    await kvSet('filtrosMov', f);
+    const clave = 'mov_' + JSON.stringify(f), guardado = await kvGet(clave);
+    if (guardado) pintar(guardado, true);
+    if (!navigator.onLine) { if (!guardado) $('#mRes').innerHTML = '<p class="aviso">Sin señal: el reporte necesita conexión (se guarda el último consultado).</p>'; return; }
+    try {
+      const d = await llamar('movimientos', { filtros: f });
+      await kvSet(clave, d);
+      if (location.hash.startsWith('#/movimientos')) pintar(d, false);
+    } catch (e) { if (!guardado) $('#mRes').innerHTML = `<p class="aviso error">${esc(e.message)}</p>`; }
+  };
+  ['#mA', '#mM', '#mT', '#mZ'].forEach((x) => { $(x).onchange = cargar; });
+  $('#mImprimir').onclick = () => window.print();
+  cargar();
 }
 
 function vAsignarPPPoE(idServ) {

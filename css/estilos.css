@@ -351,6 +351,8 @@ nav.inferior .insignia { position: absolute; top: 8px; left: calc(50% + 6px); mi
 .acciones-pago { display: flex; gap: var(--e-2); justify-content: flex-end; margin-top: var(--e-1); }
 .filtros { display: grid; grid-template-columns: 1fr 1fr; gap: var(--e-2); margin: var(--e-3) 0 var(--e-4); }
 .filtros select { margin: 0; min-height: 44px; padding: var(--e-2) var(--e-4); font-size: var(--t-sm); border-radius: var(--r-pildora); border-color: var(--c-linea); box-shadow: var(--s-1); }
+.filtros > * { min-width: 0; }
+.filtros input:not([type=checkbox]) { margin: 2px 0 0; min-height: 44px; padding: var(--e-2) var(--e-3); font-size: var(--t-sm); border-radius: var(--r-pildora); border-color: var(--c-linea); box-shadow: var(--s-1); min-width: 0; }
 .filtros.tres { grid-template-columns: 1fr 1fr; }
 .filtros.tres label:last-child { grid-column: 1 / -1; }
 .filtros label { margin: 0; font-size: var(--t-xs); color: var(--c-tenue); }
@@ -402,4 +404,65 @@ nav.inferior .insignia { position: absolute; top: 8px; left: calc(50% + 6px); mi
   .modal-fondo { align-items: center; }
   .modal { border-radius: var(--r-xl); max-height: 86dvh; }
   .modal.grande { height: 80dvh; }
+}
+
+/* ---- Documentos imprimibles (órdenes, hojas de ruta). Plantilla del recibo PDF: colores --doc-* fijos ---- */
+.barra-doc { display: flex; flex-wrap: wrap; gap: var(--e-2); margin-bottom: var(--e-4); }
+.doc { background: var(--doc-blanco); color: var(--doc-tinta); border-radius: var(--r-lg); padding: var(--e-5) var(--e-4); box-shadow: var(--s-2);
+  font-family: Arial, Helvetica, var(--f-sans); font-size: 13px; line-height: 1.4; }
+.doc a { color: var(--doc-azul-2); }
+.doc-cab { display: grid; grid-template-columns: 52px 1fr auto; gap: var(--e-3); align-items: center; padding-bottom: var(--e-3); border-bottom: 2px solid var(--doc-linea); }
+.doc-cab img { border-radius: 50%; }
+.doc-neg b { display: block; color: var(--doc-azul); font-size: 18px; }
+.doc-neg small { display: block; color: var(--doc-gris); font-size: 10px; }
+.doc-caja { background: var(--doc-azul); color: var(--doc-blanco); text-align: center; padding: var(--e-2) var(--e-3); border-radius: var(--r-sm); min-width: 128px; }
+.doc-caja span { display: block; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
+.doc-caja strong { display: block; color: var(--doc-amarillo); font-size: 16px; margin: 2px 0; }
+.doc-caja em { display: block; font-size: 9px; color: #C8D6E8; font-style: normal; font-weight: 700; margin-top: 2px; }
+.doc table { margin: var(--e-3) 0; font-size: 12.5px; }
+.doc table.doc-campos th { width: 92px; color: var(--doc-gris); font-size: 11px; text-transform: none; letter-spacing: 0; padding: 3px var(--e-2) 3px 0; border: 0; vertical-align: top; text-align: left; font-weight: 700; }
+.doc table.doc-campos td { padding: 3px 0; border: 0; text-align: left; white-space: normal; }
+.doc table.doc-det th { background: var(--doc-azul-2); color: var(--doc-blanco); font-size: 10.5px; }
+.doc table.doc-det td { border-bottom: 1px solid var(--doc-linea); }
+.doc table.doc-det tr:nth-child(even) td { background: var(--doc-zebra); }
+.doc-sec { margin: var(--e-4) 0 0; color: var(--doc-azul); font-size: 12px; letter-spacing: .03em; }
+.doc-nota { color: var(--doc-gris); font-size: 11px; margin: var(--e-1) 0; }
+.doc-resumen { display: grid; grid-template-columns: 1fr 2fr 1.3fr; gap: var(--e-2); margin: var(--e-3) 0; }
+.doc-resumen > div { background: var(--doc-fondo); border-radius: var(--r-sm); padding: var(--e-2) var(--e-3); }
+.doc-resumen span { display: block; font-size: 10px; color: var(--doc-gris); font-weight: 700; }
+.doc-resumen b { font-size: 14px; }
+.doc-resumen .doc-total { background: var(--doc-teal); color: var(--doc-blanco); }
+.doc-resumen .doc-total span { color: var(--doc-blanco); }
+.doc-item { border: 1px solid var(--doc-linea); border-radius: var(--r-md); padding: var(--e-2) var(--e-3); margin: var(--e-2) 0; break-inside: avoid; page-break-inside: avoid; }
+.doc-item h4 { display: flex; justify-content: space-between; gap: var(--e-2); margin: 0; color: var(--doc-azul); font-size: 14px; }
+.doc-item h4 small { color: var(--doc-gris); font-weight: 400; font-size: 11px; }
+.doc-item table { margin: var(--e-1) 0; }
+.doc-estado { font-size: 10px; padding: 1px var(--e-2); border-radius: var(--r-xs); white-space: nowrap; align-self: flex-start; }
+.doc-rojo { color: var(--doc-rojo); }
+.doc-casillas { font-size: 12px; margin: var(--e-1) 0 0; }
+.doc-resultado { background: var(--doc-fondo); border-radius: var(--r-xs); padding: var(--e-1) var(--e-2); font-size: 12px; margin: var(--e-1) 0 0; font-weight: 700; }
+.doc-firmas { display: grid; grid-template-columns: 1fr 1fr; gap: var(--e-6) var(--e-4); margin-top: var(--e-6); font-size: 12px; }
+.doc-firmas .firma { border-top: 1px solid var(--doc-tinta); padding-top: var(--e-1); text-align: center; margin-top: var(--e-6); color: var(--doc-gris); }
+.doc-pie { text-align: center; color: var(--doc-gris); font-size: 10px; margin-top: var(--e-5); border-top: 1px solid var(--doc-linea); padding-top: var(--e-2); }
+.acc-item { display: flex; flex-wrap: wrap; gap: var(--e-2); margin-top: var(--e-2); }
+.acc-item .aviso { width: 100%; margin: 0; }
+.cierre-ot { margin-top: var(--e-4); }
+@media (max-width: 420px) {
+  .doc-cab { grid-template-columns: 44px 1fr; }
+  .doc-cab img { width: 44px; height: 44px; }
+  .doc-caja { grid-column: 1 / -1; }
+  .doc-resumen { grid-template-columns: 1fr 1fr; }
+  .doc-resumen .doc-total { grid-column: 1 / -1; }
+}
+
+/* ---- Impresión / Guardar como PDF: solo el contenido, sin la app alrededor ---- */
+@media print {
+  @page { size: A4; margin: 12mm; }
+  html, body { background: #fff !important; }
+  .cabecera, .estado, .actualizar, nav.inferior, .toast, .saltar, .no-imprimir, #modal { display: none !important; }
+  .vista { padding: 0 !important; max-width: none !important; }
+  .doc { box-shadow: none; border-radius: 0; padding: 0; }
+  .doc a { color: inherit; text-decoration: none; }
+  .lista, .menu, .hero, table.resumen { box-shadow: none !important; border: 1px solid #ccc; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
