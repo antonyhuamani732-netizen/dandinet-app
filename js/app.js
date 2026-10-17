@@ -6,7 +6,7 @@ import { llamar } from './api.js';
 import { encolar, sincronizarTodo, iniciarAutoSync, alCambiar, pendientesDeEnvio, siguienteProvisional } from './sync.js';
 import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
-  cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado, txtMora,
+  cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -118,7 +118,7 @@ function manejarErrorSync(e) {
 
 function refrescarSiCorresponde() {
   const h = location.hash || '#/';
-  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
+  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
 }
 
 let _avisoT = null;
@@ -136,7 +136,7 @@ function enrutar() {
   RUTA = ruta;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
-    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago,
+    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan,
     mas: vMas, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
   cerrarModal();
@@ -234,6 +234,7 @@ async function vCliente(id) {
         <div class="servicio">
           <div><b>${esc(s.PLAN)}</b><small>${esc(s.ID_SERV)} · ${esc(s.MODO)} · ${soles(s.TARIFA)}/mes · PPPoE ${esc(s.PPPOE || '-')}</small></div>
           <div class="der"><span class="chip ${claseEstado(s.ESTADO)}">${esc(s.ESTADO)}</span>
+          ${s.ESTADO === 'Activo' ? `<a class="mini" href="#/plan/${esc(s.ID_SERV)}">Cambiar plan</a>` : ''}
           ${s.ESTADO === 'Activo' ? `<a class="mini rojo" href="#/corte/${esc(s.ID_SERV)}">Cortar</a>` : ''}
           ${s.ESTADO === 'Activo' && !s.PPPOE ? `<a class="mini" href="#/asignar/${esc(s.ID_SERV)}">Asignar PPPoE</a>` : ''}
           ${s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido' ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
@@ -700,7 +701,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -1004,6 +1005,68 @@ function vPPPoE() {
     aviso(navigator.onLine ? 'Código enviado.' : 'Guardado: se enviará al volver la señal.');
   };
   pintar();
+}
+
+// ---- CAMBIO DE PLAN CON PRORRATEO ----------------------------------------------------------
+// Mes del cambio: la cuota queda con el precio actual y la diferencia por días va como cargo aparte "AJUSTE PLAN"
+// (monto sugerido, se puede modificar a mano). Desde el mes siguiente: tarifa nueva.
+function vCambiarPlan(idServ) {
+  const s = servicioPorId(idServ);
+  if (!s) { vista().innerHTML = '<p class="error">Servicio no encontrado.</p>'; return; }
+  if (s.ESTADO !== 'Activo') { vista().innerHTML = '<p class="aviso error">Solo se cambia el plan de un servicio Activo.</p>'; return; }
+  const actual = Number(s.TARIFA) || 0;
+  const planes = D.planes.filter((p) => p.ACTIVO !== 'No' && p.PLAN !== s.PLAN);
+  vista().innerHTML = `<section class="form"><h2>Cambiar plan</h2>
+    <p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)}</p>
+    <dl><dt>Plan actual</dt><dd>${esc(s.PLAN)}</dd><dt>Tarifa actual</dt><dd>${soles(actual)}/mes</dd></dl>
+    <label>Plan nuevo *<select id="pl"><option value="">— elegir —</option>${planes.map((p) => `<option data-t="${Number(p.TARIFA)}">${esc(p.PLAN)}</option>`).join('')}</select></label>
+    <label>Tarifa nueva (S/ al mes)<input id="tar" type="number" step="0.10" inputmode="decimal"></label>
+    <label>Fecha del cambio<input id="fec" type="date" value="${hoyISO()}"></label>
+    <div id="calc"></div>
+    <label class="check"><input type="checkbox" id="manual"> Modificar el monto del ajuste manualmente</label>
+    <div id="manualWrap" hidden><label>Monto del ajuste a cobrar (S/)<div class="fila"><input id="aj" type="number" step="0.10" inputmode="decimal">
+      <button type="button" class="mini" id="redondear">Redondear</button></div></label>
+      <p class="sub">Use 0 si no se cobra ajuste. Un monto negativo es un descuento en la cuota del mes.</p></div>
+    <button class="btn grande verde" id="ok">${ic('check')}Registrar cambio de plan</button>
+    <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
+  let calc = null;
+  const nueva = () => Number($('#tar').value || 0);
+  const recalcular = () => {
+    if (!$('#pl').value || !(nueva() > 0) || !$('#fec').value) { calc = null; $('#calc').innerHTML = ''; return; }
+    calc = prorrateoPlan(actual, nueva(), $('#fec').value);
+    const mesTxt = txtPeriodo($('#fec').value);
+    $('#calc').innerHTML = `<div class="hero calculo">
+      <span class="eyebrow">Mes del cambio · ${esc(mesTxt)} (${calc.diasMes} días)</span>
+      <table class="periodos"><tbody>
+        <tr><td>${calc.transcurridos} día(s) con el plan actual</td><td>${soles(calc.conActual)}</td></tr>
+        <tr><td>${calc.restantes} día(s) con el plan nuevo</td><td>${soles(calc.conNueva)}</td></tr>
+        <tr><td><b>Monto del mes sugerido</b></td><td><b>${soles(calc.montoMes)}</b></td></tr>
+        <tr><td>Cuota del mes (ya generada)</td><td>${soles(actual)}</td></tr></tbody></table>
+      <div class="totalr">${calc.ajuste >= 0 ? 'Ajuste a cobrar' : 'Descuento'} <b>${soles(Math.abs(calc.ajuste))}</b></div>
+      <p class="sub">${calc.ajuste >= 0 ? 'Se agrega como cargo aparte "AJUSTE PLAN" en ' + esc(mesTxt) + '.' : 'Se descuenta de lo que falte pagar de la cuota de ' + esc(mesTxt) + '.'}
+        Desde el mes siguiente la cuota será ${soles(nueva())}.</p></div>`;
+    if (!$('#manual').checked) $('#aj').value = calc.ajuste.toFixed(2);
+  };
+  $('#pl').onchange = (e) => { const o = e.target.selectedOptions[0]; $('#tar').value = o && o.dataset.t ? o.dataset.t : ''; recalcular(); };
+  $('#tar').oninput = recalcular;
+  $('#fec').onchange = recalcular;
+  $('#manual').onchange = () => { $('#manualWrap').hidden = !$('#manual').checked; if (!$('#manual').checked) recalcular(); else $('#aj').focus(); };
+  $('#redondear').onclick = () => { const v = Number($('#aj').value || 0); $('#aj').value = (v >= 0 ? Math.round(v) : -Math.round(-v)).toFixed(2); };
+  $('#ok').onclick = async () => {
+    if (!$('#pl').value) return aviso('Elija el plan nuevo.', 'error');
+    if (!(nueva() > 0)) return aviso('La tarifa debe ser mayor a 0.', 'error');
+    if (!calc) return aviso('Revise la fecha del cambio.', 'error');
+    const manual = $('#manual').checked, ajuste = manual ? Number($('#aj').value) : calc.ajuste;
+    if (manual && ($('#aj').value === '' || isNaN(ajuste))) return aviso('Escriba el monto del ajuste (0 si no se cobra).', 'error');
+    const texto = `${s.PLAN} ${soles(actual)} → ${$('#pl').value} ${soles(nueva())}\nDesde el ${txtFecha($('#fec').value)}\n` +
+      (ajuste > 0 ? `Cargo aparte AJUSTE PLAN: ${soles(ajuste)}` : ajuste < 0 ? `Descuento en la cuota del mes: ${soles(-ajuste)}` : 'Sin ajuste en el mes del cambio') +
+      (manual && r2(ajuste) !== calc.ajuste ? `\n(sugerido ${soles(calc.ajuste)})` : '');
+    if (!(await confirmar(texto, { titulo: '¿Registrar el cambio de plan?', si: 'Registrar' }))) return;
+    await encolar({ tipo: 'CAMBIAR_PLAN', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, plan: $('#pl').value, tarifa: nueva(),
+      fecha: $('#fec').value, datos: manual ? { prorrateo: true, ajuste: r2(ajuste) } : { prorrateo: true } });
+    aviso(navigator.onLine ? 'Cambio de plan enviado.' : 'Guardado sin señal: se enviará al volver la conexión.');
+    location.hash = '#/cliente/' + s.ID_CLIENTE;
+  };
 }
 
 function vAsignarPPPoE(idServ) {

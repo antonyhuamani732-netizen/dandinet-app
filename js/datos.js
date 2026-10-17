@@ -58,6 +58,19 @@ export function txtMora(dias) {
   return m === 1 ? '1 mes' : m + ' meses';
 }
 
+/**
+ * Prorrateo de cambio de plan (igual que el servidor, calculoProrrateoPlan). El día del cambio cuenta con el plan nuevo.
+ * Monto del mes = días transcurridos × (actual / días del mes) + días restantes × (nueva / días del mes).
+ */
+export function prorrateoPlan(tarifaActual, tarifaNueva, fechaISO) {
+  const [a, m, d] = String(fechaISO).slice(0, 10).split('-').map(Number);
+  const diasMes = new Date(Date.UTC(a, m, 0)).getUTCDate();
+  const restantes = diasMes - d + 1, transcurridos = d - 1;
+  const montoMes = r2(tarifaActual * transcurridos / diasMes + tarifaNueva * restantes / diasMes);
+  return { diasMes, transcurridos, restantes, montoMes, ajuste: r2(montoMes - tarifaActual),
+    conActual: r2(tarifaActual * transcurridos / diasMes), conNueva: r2(tarifaNueva * restantes / diasMes) };
+}
+
 export const hoyISO = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date());
 export const ahoraISO = () => {
   const d = new Date(), f = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima', hour12: false,
