@@ -1,6 +1,6 @@
 // SERVICE WORKER: guarda la app en el celular para que ABRA SIN INTERNET.
 // Al publicar cambios, suba la VERSION: el celular descarga la nueva y borra la vieja.
-const VERSION = 'dandinet-v1.2.0';
+const VERSION = 'dandinet-v1.3.0';
 const ARCHIVOS = ['./', './index.html', './manifest.webmanifest', './css/estilos.css',
   './js/app.js', './js/api.js', './js/auth.js', './js/config.js', './js/datos.js', './js/db.js', './js/sync.js',
   './icons/icono-192.png', './icons/icono-512.png'];

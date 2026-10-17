@@ -139,3 +139,15 @@ nav.inferior a.activo { color: var(--azul); font-weight: 700; }
 .fila { display: flex; gap: 8px; align-items: center; } .fila input { flex: 1; }
 .pp { display: flex; justify-content: space-between; gap: 10px; padding: 12px; width: 100%; }
 .pp .der { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+
+/* dashboard */
+.filtros { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 4px; }
+.filtros select { margin: 0; padding: 10px; font-size: 15px; }
+.kpi.amarillo { border-color: var(--amarillo); }
+.barras { background: #fff; border-radius: var(--radio); padding: 10px 12px; }
+.barra-fila { display: grid; grid-template-columns: 96px 1fr auto; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; }
+.barra-fila .et { color: var(--suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.barra { background: var(--fondo); border-radius: 6px; height: 14px; overflow: hidden; }
+.barra i { display: block; height: 100%; border-radius: 6px; }
+.barra-fila .val { font-weight: 600; white-space: nowrap; }
+table.resumen th { font-size: 12px; }

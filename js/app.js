@@ -116,7 +116,7 @@ function enrutar() {
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
     hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta,
-    mas: vMas, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
+    mas: vMas, dashboard: vDashboard, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
   Promise.resolve(v(decodeURIComponent(arg || ''))).catch((e) => { vista().innerHTML = `<p class="error">${esc(e.message)}</p>`; });
 }
@@ -142,6 +142,7 @@ async function vInicio() {
       <a class="btn" href="#/cola">📤 Cola de envío</a>
       <a class="btn" href="#/hoy">🧾 Mis cobros de hoy</a>
     </div>
+    <a class="btn" href="#/dashboard">📊 Dashboard</a>
     <button class="btn secundario" id="btnSync">⟳ Sincronizar ahora</button>`;
   $('#btnSync').onclick = sincronizarManual;
 }
@@ -533,6 +534,7 @@ function vReactivar(idServ) {
 function vMas() {
   vista().innerHTML = `<h2>Más opciones</h2>
     <a class="btn grande verde" href="#/nuevo">➕ Nuevo cliente</a>
+    <a class="btn grande azul" href="#/dashboard">📊 Dashboard</a>
     <div class="botones">
       <a class="btn" href="#/pppoe">📡 PPPoE</a>
       <a class="btn" href="#/cortar">✂ A cortar</a>
@@ -668,6 +670,86 @@ function vAsignarPPPoE(idServ) {
     aviso(navigator.onLine ? 'Enviado.' : 'Guardado: se enviará al volver la señal.');
     location.hash = '#/cliente/' + s.ID_CLIENTE;
   };
+}
+
+// ---- DASHBOARD -----------------------------------------------------------------------
+const MESES_TXT = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SET', 'OCT', 'NOV', 'DIC'];
+
+async function vDashboard() {
+  const hoy = hoyISO(), anioHoy = Number(hoy.slice(0, 4)), mesHoy = Number(hoy.slice(5, 7));
+  const f = (await kvGet('dashFiltros')) || { anio: anioHoy, mes: mesHoy, zona: '', plan: '' };
+  const opt = (v, t, sel) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(t)}</option>`;
+  vista().innerHTML = `<h2>Dashboard</h2>
+    <div class="filtros">
+      <select id="dA">${[anioHoy - 2, anioHoy - 1, anioHoy, anioHoy + 1].map((a) => opt(a, a, f.anio)).join('')}</select>
+      <select id="dM">${MESES_TXT.map((m, i) => opt(i + 1, m, f.mes)).join('')}</select>
+      <select id="dZ">${opt('', 'Todas las zonas', f.zona)}${lst('ZONA').map((z) => opt(z, z, f.zona)).join('')}</select>
+      <select id="dP">${opt('', 'Todos los planes', f.plan)}${D.planes.map((p) => opt(p.PLAN, p.PLAN, f.plan)).join('')}</select>
+    </div>
+    <div id="dash"><p class="aviso">Cargando…</p></div>`;
+  const leer = () => ({ anio: Number($('#dA').value), mes: Number($('#dM').value), zona: $('#dZ').value, plan: $('#dP').value });
+  ['#dA', '#dM', '#dZ', '#dP'].forEach((s) => { $(s).onchange = () => cargarDashboard(leer()); });
+  cargarDashboard(f);
+}
+
+async function cargarDashboard(f) {
+  await kvSet('dashFiltros', f);
+  const clave = 'dash_' + JSON.stringify(f);
+  const guardado = await kvGet(clave);
+  if (guardado) pintarDashboard(guardado, true);
+  if (!navigator.onLine) { if (!guardado) $('#dash').innerHTML = '<p class="aviso">Sin señal: el dashboard necesita conexión.</p>'; return; }
+  try {
+    const d = await llamar('dashboard', { filtros: f });
+    await kvSet(clave, d);
+    if (location.hash.startsWith('#/dashboard')) pintarDashboard(d, false);
+  } catch (e) {
+    if (!guardado) $('#dash').innerHTML = `<p class="aviso error">${esc(e.message)}</p>`;
+  }
+}
+
+function barras(items, campo, formato, color = 'var(--teal)') {
+  const max = Math.max(1, ...items.map((x) => Number(x[campo]) || 0));
+  return `<div class="barras">${items.map((x) => `<div class="barra-fila"><span class="et">${esc(x.etiqueta)}</span>
+    <span class="barra"><i style="width:${Math.round((Number(x[campo]) || 0) / max * 100)}%;background:${color}"></i></span>
+    <span class="val">${formato(x[campo])}</span></div>`).join('')}</div>`;
+}
+
+function pintarDashboard(d, desdeCache) {
+  const k = d.kpi, pct = (x) => (Number(x) || 0).toFixed(1) + '%';
+  const cards = [
+    ['Activos', k.activos, 'verde'], ['Morosos', k.morosos, 'rojo'], ['Cortados', k.cortados + k.suspendidos, 'gris'],
+    ['Morosidad', pct(k.tasaMorosidad), 'amarillo'], ['Altas del mes', k.altasMes, 'azul'], ['Cortes/bajas del mes', k.cortesMes, 'gris'],
+    ['Recaudado del mes', soles(k.recaudadoMes), 'verde'], ['Esperado del mes', soles(k.esperadoMes), 'azul'],
+    ['% cobranza del mes', pct(k.pctCobranza), 'azul'], ['Deuda vencida', soles(k.deudaVencida), 'rojo'],
+    ['Por cobrar', soles(k.porCobrar), 'amarillo'], ['Recaudado del año', soles(k.recaudadoAnio), 'verde'],
+  ];
+  const mesTxt = MESES_TXT[d.filtros.mes - 1] + ' ' + d.filtros.anio;
+  $('#dash').innerHTML = `
+    <p class="sub">${esc(mesTxt)}${d.filtros.zona ? ' · ' + esc(d.filtros.zona) : ''}${d.filtros.plan ? ' · ' + esc(d.filtros.plan) : ''} ·
+      calculado ${esc(txtFecha(d.generado))} ${esc(String(d.generado).slice(11, 16))}${desdeCache ? ' (guardado, actualizando…)' : ''}</p>
+    <section class="tarjetas">${cards.map(([t, v, c]) => `<div class="kpi ${c}"><span>${esc(t)}</span><b>${typeof v === 'number' ? v : esc(v)}</b></div>`).join('')}</section>
+    <h3>Morosidad por antigüedad</h3>
+    ${barras(d.antiguedad.map((x) => ({ etiqueta: `${x.tramo} (${x.clientes})`, v: x.monto })), 'v', soles, 'var(--rojo)')}
+    <h3>Recaudado por mes · ${d.filtros.anio}</h3>
+    ${barras(d.porMes.map((x) => ({ etiqueta: x.mes, v: x.recaudado })), 'v', (v) => soles(v).replace('.00', ''))}
+    <table class="resumen"><thead><tr><th>Mes</th><th>Recaudado</th><th>Esperado</th><th>% cobrado</th></tr></thead><tbody>
+      ${d.porMes.filter((x) => x.esperado || x.recaudado).map((x) => `<tr><td>${x.mes}</td><td>${soles(x.recaudado)}</td><td>${soles(x.esperado)}</td><td>${pct(x.pctCobrado)}</td></tr>`).join('')}
+    </tbody></table>
+    <h3>Por método de pago</h3>
+    <table class="resumen"><thead><tr><th>Método</th><th>${esc(MESES_TXT[d.filtros.mes - 1])}</th><th>Año</th></tr></thead><tbody>
+      ${d.porMetodo.map((x) => `<tr><td>${esc(x.nombre)}</td><td>${soles(x.mes)}</td><td>${soles(x.anio)}</td></tr>`).join('') || '<tr><td colspan="3">Sin pagos</td></tr>'}</tbody></table>
+    <h3>Por cobrador</h3>
+    <table class="resumen"><thead><tr><th>Cobrador</th><th>${esc(MESES_TXT[d.filtros.mes - 1])}</th><th>Año</th></tr></thead><tbody>
+      ${d.porCobrador.map((x) => `<tr><td>${esc(x.nombre)}</td><td>${soles(x.mes)}</td><td>${soles(x.anio)}</td></tr>`).join('') || '<tr><td colspan="3">Sin pagos</td></tr>'}</tbody></table>
+    <h3>Por zona</h3>
+    <table class="resumen"><thead><tr><th>Zona</th><th>Recaudado año</th><th>Deuda vencida</th></tr></thead><tbody>
+      ${d.porZona.map((x) => `<tr><td>${esc(x.nombre)}</td><td>${soles(x.anio)}</td><td>${soles(x.deudaVencida)}</td></tr>`).join('')}</tbody></table>
+    <h3>Ranking de deudores</h3>
+    <ul class="lista">${d.ranking.map((c, i) => `<li><a href="#/cliente/${esc(c.id)}"><div><b>${i + 1}. ${esc(c.nombre)}</b>
+      <small>${esc(c.id)} · ${esc(c.estado)} · ${c.meses} mes(es)</small></div><div class="der"><b class="error">${soles(c.deuda)}</b></div></a></li>`).join('') || '<li class="vacio">Sin deudores</li>'}</ul>
+    <h3>Riesgo de corte</h3>
+    <ul class="lista">${d.riesgo.map((c) => `<li><a href="#/cliente/${esc(c.id)}"><div><b>${esc(c.nombre)}</b>
+      <small>${c.dias} días de atraso · ${soles(c.deuda)}</small></div><div class="der"><span class="chip ${c.situacion === 'A CORTAR' ? 'e-moroso' : 'e-porvencer'}">${esc(c.situacion)}</span></div></a></li>`).join('') || '<li class="vacio">Nadie en riesgo</li>'}</ul>`;
 }
 
 // ---- CUENTA ----------------------------------------------------------------------------
