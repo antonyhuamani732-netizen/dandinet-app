@@ -238,18 +238,46 @@ async function vCliente(id) {
           ${s.ESTADO === 'Activo' && !s.PPPOE ? `<a class="mini" href="#/asignar/${esc(s.ID_SERV)}">Asignar PPPoE</a>` : ''}
           ${s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido' ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
         </div>`).join('') || '<p class="vacio">Sin servicios</p>'}
+      ${bloqueRenovar(id, r)}
       <h3>Últimos pagos</h3>
-      <ul class="lista compacta" id="listaPagos">${pagos.map((p) => `<li><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(p.PERIODOS)}</small></div>
+      <ul class="lista compacta" id="listaPagos">${pagos.map((p) => `<li><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(txtPeriodos(p.PERIODOS))}</small></div>
         <div class="der">${soles(p.MONTO)}${p.ESTADO === 'Anulado' ? '<small class="error">ANULADO</small>' : ''}
           <span class="acciones-pago"><button class="mini" data-pdf="${esc(p.N_RECIBO)}">${ic('documento')}PDF</button>${p.ESTADO !== 'Anulado' ? `<button class="mini rojo" data-anular="${esc(p.N_RECIBO)}">Anular</button>` : ''}</span></div></li>`).join('') || '<li class="vacio">Sin pagos recientes</li>'}</ul>
       <div id="zonaPdf"></div>
     </section>`;
   $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, plantilla('MsgCobranza', id));
+  const bRen = $('#btnRenovar');
+  if (bRen && !bRen.disabled) bRen.onclick = async () => {
+    const anio = Number(bRen.dataset.anio);
+    if (!(await confirmar(`Se generarán las cuotas de ENE a DIC ${anio} para los servicios activos de ${c.NOMBRES}.`,
+      { titulo: `¿Renovar contrato ${anio}?`, si: 'Renovar' }))) return;
+    await encolar({ tipo: 'RENOVAR_ANIO', idCliente: id, datos: { anio } });
+    bRen.disabled = true;
+    aviso(navigator.onLine ? 'Renovación enviada.' : 'Guardada: se enviará al volver la señal.');
+  };
   $('#listaPagos').addEventListener('click', (e) => {
     const bp = e.target.closest('[data-pdf]'), ba = e.target.closest('[data-anular]');
     if (bp) { prepararPdf(bp.dataset.pdf, $('#zonaPdf')); $('#zonaPdf').scrollIntoView({ behavior: 'smooth' }); }
     if (ba) anularRecibo(ba.dataset.anular);
   });
+}
+
+/**
+ * Botón "Renovar contrato anual": genera las cuotas del año siguiente.
+ * Solo se habilita si el cliente NO tiene deuda vencida (el servidor vuelve a comprobarlo).
+ */
+function bloqueRenovar(id, r) {
+  const activos = serviciosDe(id).filter((s) => s.ESTADO === 'Activo');
+  if (!activos.length) return '';
+  const anio = Number(hoyISO().slice(0, 4)) + 1;
+  const idsServ = new Set(activos.map((s) => s.ID_SERV));
+  const yaTiene = D.cargos.some((k) => idsServ.has(k.ID_SERV) && k.CONCEPTO === 'MENSUALIDAD' && String(k.PERIODO).startsWith(anio + '-'));
+  const deuda = Number(r.DEUDA_VENCIDA) || 0;
+  const motivo = yaTiene ? `El contrato ${anio} ya está renovado.`
+    : deuda > 0 ? `Disponible cuando no tenga deuda vencida (debe ${soles(deuda)}).` : `Genera las cuotas de ENE a DIC ${anio}.`;
+  return `<h3>Contrato</h3>
+      <button class="btn" id="btnRenovar" data-anio="${anio}" ${yaTiene || deuda > 0 ? 'disabled aria-disabled="true"' : ''}>${ic('documento')}Renovar contrato anual ${anio}</button>
+      <p class="sub">${esc(motivo)}</p>`;
 }
 
 // ---- COBRAR ------------------------------------------------------------------------
@@ -400,13 +428,16 @@ async function vRecibo(idSol) {
   if (!rech) $('#btnWspTxt').onclick = () => enviarWhatsApp(op.idCliente, texto);
 }
 
+/** Periodos guardados como fecha técnica (pagos migrados del Excel) → "JUL-2026". */
+const txtPeriodos = (t) => String(t || '').replace(/(\d{4}-\d{2})-\d{2}T[\d:.]+Z?/g, (m, ym) => txtPeriodo(ym));
+
 // ---- RECIBO DE UN PAGO DEL SERVIDOR (registrado en otro equipo o antes de borrar datos) ---
 // Usa los pagos que ya llegan en la sincronización: no descarga nada extra ni ocupa más espacio.
 function vPago(nro) {
   const p = D.pagos.find((x) => x.N_RECIBO === nro);
   if (!p) { vista().innerHTML = '<p class="error">Recibo no encontrado en los datos del celular (solo se guardan los últimos 13 meses).</p>'; return; }
   const cfg = D.config, anulado = p.ESTADO === 'Anulado';
-  const periodos = String(p.PERIODOS || '').split(/\s*[,;]\s*/).filter(Boolean);
+  const periodos = txtPeriodos(p.PERIODOS).split(/\s*[,;]\s*/).filter(Boolean);
   vista().innerHTML = `
     <section class="recibo ${anulado ? 'rechazado' : ''}">
       <div class="cab"><b>${esc(cfg.Negocio || 'D@NDINET')}</b><span>RECIBO DE PAGO</span><strong>N° ${esc(p.N_RECIBO)}</strong></div>
@@ -669,7 +700,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -914,21 +945,43 @@ function vFormCliente(id) {
 // ---- PPPoE ---------------------------------------------------------------------------
 function vPPPoE() {
   let filtro = 'Todos';
+  // historial agrupado por código, una sola vez (búsqueda instantánea y sin consultar al servidor)
+  const hist = {};
+  D.histPPPoE.forEach((h) => { (hist[h.CODIGO] = hist[h.CODIGO] || []).push(h); });
+  Object.values(hist).forEach((l) => l.sort((x, y) => String(y.F_DESDE).localeCompare(String(x.F_DESDE))));
+  const cuenta = (e) => D.pppoe.filter((p) => p.ESTADO === e).length;
+  vista().innerHTML = `<h2>PPPoE</h2>
+    <input id="ppq" class="buscador" type="search" placeholder="Código PPPoE, cliente o titular" autocomplete="off" inputmode="search" aria-label="Buscar PPPoE">
+    <div class="acciones-sel" id="ppFiltros"></div>
+    <button class="btn" id="agregar">${ic('agregar')}Agregar código</button>
+    <p class="sub" id="ppTotal"></p>
+    <ul class="lista" id="ppLista"></ul>`;
+  const fila = (p) => {
+    const cli = p.ID_CLIENTE ? D.porId[p.ID_CLIENTE] || {} : null, res = p.ID_CLIENTE ? D.resumen[p.ID_CLIENTE] || {} : {};
+    const anteriores = (hist[p.CODIGO] || []).filter((h) => h.F_HASTA || h.ID_CLIENTE !== p.ID_CLIENTE);
+    return `<li><div class="pp"><div><b>${esc(p.CODIGO)}</b><small>Titular: ${esc(p.TITULAR || '-')}</small>
+      ${cli ? `<small>Cliente: <a href="#/cliente/${esc(p.ID_CLIENTE)}">${esc(p.ID_CLIENTE)} · ${esc(p.CLIENTE)}</a>${cli.ZONA ? ' · ' + esc(cli.ZONA) : ''}${res.ESTADO ? ` <span class="chip ${claseEstado(res.ESTADO)}">${esc(res.ESTADO)}</span>` : ''}</small>` : ''}
+      ${anteriores.length ? `<details class="hist"><summary>Usado antes por ${anteriores.length} cliente(s)</summary><ul>${anteriores.map((h) =>
+        `<li><a href="#/cliente/${esc(h.ID_CLIENTE)}">${esc(h.ID_CLIENTE)} · ${esc(h.CLIENTE)}</a><small>${esc(txtFecha(h.F_DESDE)) || '¿?'} → ${esc(txtFecha(h.F_HASTA)) || 'hoy'}${h.MOTIVO_FIN ? ' · ' + esc(h.MOTIVO_FIN) : ''}</small></li>`).join('')}</ul></details>` : ''}</div>
+      <div class="der"><span class="chip ${p.ESTADO === 'Disponible' ? 'e-activo' : p.ESTADO === 'Asignado' ? 'e-pend' : 'e-moroso'}">${esc(p.ESTADO)}</span>
+      ${p.ESTADO === 'Asignado' ? `<button class="mini" data-acc="LIBERAR_PPPOE" data-c="${esc(p.CODIGO)}">Liberar</button>` : ''}
+      ${p.ESTADO === 'Disponible' ? `<button class="mini" data-acc="BLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Bloquear</button>` : ''}
+      ${p.ESTADO === 'Bloqueado' ? `<button class="mini" data-acc="DESBLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Desbloquear</button>` : ''}</div></div></li>`;
+  };
+  const MAX = 50;
   const pintar = () => {
-    const cuenta = (e) => D.pppoe.filter((p) => p.ESTADO === e).length;
-    const lista = D.pppoe.filter((p) => filtro === 'Todos' || p.ESTADO === filtro);
-    vista().innerHTML = `<h2>PPPoE</h2>
-      <div class="acciones-sel">${['Todos', 'Disponible', 'Asignado', 'Bloqueado'].map((e) =>
-        `<button class="mini ${e === filtro ? 'sel' : ''}" data-f="${e}">${e}${e === 'Todos' ? '' : ' (' + cuenta(e) + ')'}</button>`).join('')}</div>
-      <button class="btn" id="agregar">${ic('agregar')}Agregar código</button>
-      <ul class="lista">${lista.map((p) => `<li><div class="pp"><div><b>${esc(p.CODIGO)}</b><small>Titular: ${esc(p.TITULAR || '-')}</small>
-        ${p.CLIENTE ? `<small>Cliente: <a href="#/cliente/${esc(p.ID_CLIENTE)}">${esc(p.CLIENTE)}</a></small>` : ''}</div>
-        <div class="der"><span class="chip ${p.ESTADO === 'Disponible' ? 'e-activo' : p.ESTADO === 'Asignado' ? 'e-pend' : 'e-moroso'}">${esc(p.ESTADO)}</span>
-        ${p.ESTADO === 'Asignado' ? `<button class="mini" data-acc="LIBERAR_PPPOE" data-c="${esc(p.CODIGO)}">Liberar</button>` : ''}
-        ${p.ESTADO === 'Disponible' ? `<button class="mini" data-acc="BLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Bloquear</button>` : ''}
-        ${p.ESTADO === 'Bloqueado' ? `<button class="mini" data-acc="DESBLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Desbloquear</button>` : ''}</div></div></li>`).join('') || '<li class="vacio">Sin códigos</li>'}</ul>`;
-    vista().querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { filtro = b.dataset.f; pintar(); }; });
-    vista().querySelectorAll('[data-acc]').forEach((b) => { b.onclick = async () => {
+    $('#ppFiltros').innerHTML = ['Todos', 'Disponible', 'Asignado', 'Bloqueado'].map((e) =>
+      `<button class="mini ${e === filtro ? 'sel' : ''}" data-f="${e}">${e}${e === 'Todos' ? '' : ' (' + cuenta(e) + ')'}</button>`).join('');
+    const q = $('#ppq').value.trim().toLowerCase();
+    const coincide = (p) => !q || String(p.CODIGO).toLowerCase().includes(q) || String(p.CLIENTE || '').toLowerCase().includes(q) ||
+      String(p.ID_CLIENTE || '').toLowerCase().includes(q) || String(p.TITULAR || '').toLowerCase().includes(q) ||
+      (hist[p.CODIGO] || []).some((h) => String(h.CLIENTE || '').toLowerCase().includes(q));
+    const lista = D.pppoe.filter((p) => (filtro === 'Todos' || p.ESTADO === filtro) && coincide(p))
+      .sort((x, y) => (q && String(y.CODIGO).toLowerCase() === q) - (q && String(x.CODIGO).toLowerCase() === q));   // el código exacto primero
+    $('#ppTotal').textContent = lista.length > MAX ? `${lista.length} códigos · mostrando ${MAX}. Escriba más para afinar.` : `${lista.length} código(s)`;
+    $('#ppLista').innerHTML = lista.slice(0, MAX).map(fila).join('') || '<li class="vacio">Sin códigos</li>';
+    $('#ppFiltros').querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { filtro = b.dataset.f; pintar(); }; });
+    $('#ppLista').querySelectorAll('[data-acc]').forEach((b) => { b.onclick = async () => {
       const acc = b.dataset.acc, cod = b.dataset.c;
       const texto = { LIBERAR_PPPOE: 'liberar (queda Disponible)', BLOQUEAR_PPPOE: 'bloquear', DESBLOQUEAR_PPPOE: 'desbloquear' }[acc];
       const r = await pedirTexto(`Motivo para ${texto}:`, { titulo: `Código ${cod}`, si: 'Enviar' });
@@ -939,15 +992,16 @@ function vPPPoE() {
       aviso(navigator.onLine ? 'Enviado.' : 'Guardado: se enviará al volver la señal.');
       b.disabled = true;
     }; });
-    $('#agregar').onclick = async () => {
-      const cod = ((await pedirTexto('Código PPPoE nuevo:', { titulo: 'Agregar código', si: 'Siguiente' })) || '').trim();
-      if (!cod) return;
-      if (D.pppoe.some((p) => String(p.CODIGO) === cod)) return aviso('Ese código ya existe.', 'error');
-      const titular = await pedirTexto('Titular de la cuenta (a nombre de quién está):', { titulo: `Código ${cod}`, si: 'Agregar' });
-      if (titular === null) return;
-      await encolar({ tipo: 'AGREGAR_PPPOE', codigoPPPoE: cod, datos: { titular: titular.trim() } });
-      aviso(navigator.onLine ? 'Código enviado.' : 'Guardado: se enviará al volver la señal.');
-    };
+  };
+  $('#ppq').addEventListener('input', pintar);
+  $('#agregar').onclick = async () => {
+    const cod = ((await pedirTexto('Código PPPoE nuevo:', { titulo: 'Agregar código', si: 'Siguiente' })) || '').trim();
+    if (!cod) return;
+    if (D.pppoe.some((p) => String(p.CODIGO) === cod)) return aviso('Ese código ya existe.', 'error');
+    const titular = await pedirTexto('Titular de la cuenta (a nombre de quién está):', { titulo: `Código ${cod}`, si: 'Agregar' });
+    if (titular === null) return;
+    await encolar({ tipo: 'AGREGAR_PPPOE', codigoPPPoE: cod, datos: { titular: titular.trim() } });
+    aviso(navigator.onLine ? 'Código enviado.' : 'Guardado: se enviará al volver la señal.');
   };
   pintar();
 }

@@ -330,6 +330,15 @@ nav.inferior .insignia { position: absolute; top: 8px; left: calc(50% + 6px); mi
 /* ---- Varios --------------------------------------------------------------------------------------- */
 .pp { display: flex; justify-content: space-between; gap: var(--e-3); padding: var(--e-3) var(--e-4); width: 100%; }
 .pp .der { gap: var(--e-2); }
+.hist { margin-top: var(--e-2); font-size: var(--t-xs); }
+.hist summary { cursor: pointer; color: var(--c-enlace); font-weight: var(--w-semi); min-height: 32px; display: flex; align-items: center; }
+.hist ul { list-style: none; margin: var(--e-1) 0 0; padding: 0 0 0 var(--e-3); border-left: 2px solid var(--c-linea); }
+.hist li { padding: var(--e-1) 0; }
+.hist li small { margin: 0; }
+/* enlaces dentro de una fila PPPoE: en línea, sin el relleno de las filas de lista */
+.lista .pp a { display: inline; padding: 0; min-height: 0; color: var(--c-enlace); font-weight: var(--w-semi); }
+.lista .pp a:hover { background: none; text-decoration: underline; }
+.lista .hist li { border: 0 !important; }
 .chips { display: flex; flex-wrap: wrap; gap: var(--e-2); }
 .acciones-pago { display: flex; gap: var(--e-2); justify-content: flex-end; margin-top: var(--e-1); }
 .filtros { display: grid; grid-template-columns: 1fr 1fr; gap: var(--e-2); margin: var(--e-3) 0 var(--e-4); }

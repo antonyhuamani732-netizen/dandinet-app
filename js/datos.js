@@ -4,7 +4,7 @@
 import { kvGet } from './db.js';
 
 export const D = {
-  clientes: [], privados: {}, resumen: {}, servicios: [], cargos: [], pppoe: [], planes: [], listas: [], pagos: [],
+  clientes: [], privados: {}, resumen: {}, servicios: [], cargos: [], pppoe: [], histPPPoE: [], planes: [], listas: [], pagos: [],
   config: {}, generado: null, porId: {},
 };
 
@@ -25,6 +25,7 @@ export function aplicar(s) {
   D.servicios = aObjetos(s.servicios);
   D.cargos = aObjetos(s.cargos);
   D.pppoe = aObjetos(s.pppoe);
+  D.histPPPoE = aObjetos(s.histPPPoE);   // quién usó cada código (llega desde la v1.8)
   D.planes = aObjetos(s.planes);
   D.listas = aObjetos(s.listas);
   D.pagos = aObjetos(s.pagos);
