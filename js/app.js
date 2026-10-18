@@ -1613,7 +1613,7 @@ function ponerTema(t) {
   if (t === 'auto') delete document.documentElement.dataset.tema; else document.documentElement.dataset.tema = t;
   // color de la barra del celular
   const oscuro = t === 'noche' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.setAttribute('content', oscuro ? '#0f1730' : '#1c1e54'); });
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.setAttribute('content', oscuro ? '#081a33' : '#0c2447'); });
 }
 
 window.addEventListener('DOMContentLoaded', arrancar);

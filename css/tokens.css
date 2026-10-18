@@ -19,7 +19,10 @@
   --c-primario-press: #2e2b8c;
   --c-primario-suave: #eeebff;      /* fondos de selección / chips activos */
   --c-sobre-primario: #ffffff;
-  --c-marca-oscura: #1c1e54;        /* barra superior */
+  --c-marca-oscura: #0c2447;        /* barra superior = azul del logo D@NDINET */
+  --c-marca-cian: #57cadb;          /* colores del logo (fibra óptica) */
+  --c-marca-oro: #e2c579;           /* sobre azul: 9.2:1 */
+  --c-marca-oro-texto: #8a6a12;     /* dorado para texto sobre fondo claro: 4.8:1 */
   --c-sobre-marca: #ffffff;
 
   /* ---- Superficies ------------------------------------------------------------- */
@@ -88,9 +91,9 @@
   /* ---- Plantilla de documentos imprimibles (órdenes, hojas de ruta, reportes) --------
      Los mismos colores del recibo PDF (ReciboDocs.gs). NO cambian con el tema: un
      documento siempre se ve e imprime igual (fondo blanco). */
-  --doc-azul: #1F3A5F;  --doc-azul-2: #2C5282;  --doc-teal: #2A9D8F;  --doc-rojo: #C62828;
+  --doc-azul: #0C2447;  --doc-azul-2: #2C5282;  --doc-teal: #2A9D8F;  --doc-rojo: #C62828;
   --doc-gris: #5F6B7A;  --doc-fondo: #F4F6F8;   --doc-tinta: #1A202C; --doc-linea: #D9DEE5;
-  --doc-amarillo: #FFD54F;  --doc-blanco: #FFFFFF;  --doc-zebra: #F7F9FB;
+  --doc-amarillo: #E2C579;  --doc-blanco: #FFFFFF;  --doc-zebra: #F7F9FB;
 }
 
 /* ==== MODO NOCHE ==================================================================
@@ -105,7 +108,8 @@
     --c-primario-press: #a99eff;
     --c-primario-suave: #26234d;
     --c-sobre-primario: #0b1220;
-    --c-marca-oscura: #0f1730;
+    --c-marca-oscura: #081a33;
+    --c-marca-oro-texto: #e2c579;
     --c-sobre-marca: #e8edf7;
 
     --c-fondo: #0b1220;
@@ -142,7 +146,8 @@
   --c-primario-press: #a99eff;
   --c-primario-suave: #26234d;
   --c-sobre-primario: #0b1220;
-  --c-marca-oscura: #0f1730;
+  --c-marca-oscura: #081a33;
+  --c-marca-oro-texto: #e2c579;
   --c-sobre-marca: #e8edf7;
 
   --c-fondo: #0b1220;

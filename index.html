@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#1c1e54" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0f1730" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#0c2447" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#081a33" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="Cobranza y control de clientes D@NDINET">
   <title>D@NDINET Cobranza</title>
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" href="icons/icono-192.png">
-  <link rel="apple-touch-icon" href="icons/icono-192.png">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+  <link rel="icon" href="icons/icono-192.png" sizes="192x192">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
   <script>/* tema elegido (Día / Noche) antes de pintar, para que no parpadee */
     try { var t = localStorage.getItem('tema'); if (t === 'dia' || t === 'noche') document.documentElement.dataset.tema = t; } catch (e) {}</script>
   <link rel="stylesheet" href="css/tokens.css">
@@ -22,7 +23,7 @@
   <!-- INICIO DE SESIÓN -->
   <main id="login" class="login" hidden>
     <img src="icons/icono-192.png" alt="D@NDINET" width="96" height="96">
-    <h1>D@NDINET</h1>
+    <h1>D<span class="arroba">@</span>NDINET</h1>
     <p>Cobranza y control de clientes</p>
     <div id="btnGoogle" class="btn-google"></div>
     <p id="loginEstado" class="sub"></p>
@@ -34,7 +35,7 @@
     <a class="saltar" href="#vista">Saltar al contenido</a>
     <header class="cabecera">
       <div class="cabecera-in">
-        <a href="#/inicio" class="marca"><img src="icons/icono-192.png" alt="" width="28" height="28"> D@NDINET</a>
+        <a href="#/inicio" class="marca"><img src="icons/icono-192.png" alt="" width="32" height="32"> <span aria-label="D@NDINET">D<span class="arroba">@</span>NDINET</span></a>
         <a href="#/cuenta" id="usuario" class="usuario" aria-label="Mi cuenta"></a>
       </div>
     </header>
