@@ -4,7 +4,7 @@
 // la conexión. Cada operación tiene un idSolicitud único: reenviarla nunca la duplica.
 import { CONFIG } from './config.js';
 import { llamar } from './api.js';
-import { kvGet, kvSet, kvDel, kvClaves, colaPut, colaTodos, colaVaciar } from './db.js';
+import { kvGet, kvSet, kvDel, kvClaves, colaPut, colaTodos, colaVaciar, colaBorrar } from './db.js';
 import { aplicar, ahoraISO } from './datos.js';
 
 let _enCurso = null;
@@ -40,6 +40,12 @@ export async function pendientesDeEnvio() {
  * El sistema pasó a otro libro (ej. de PRUEBAS al DEFINITIVO): se borra lo guardado del anterior
  * (cola, PDF, dashboard, reportes) para no mezclar números de recibo ni enviar operaciones de prueba.
  */
+/** Borra lo ya enviado (historial) y las copias guardadas (PDF, dashboard, reportes). Lo PENDIENTE no se toca. */
+async function limpiarHistorialLocal() {
+  for (const o of await colaTodos()) if (o.estadoLocal === 'ok' || o.estadoLocal === 'rechazado') await colaBorrar(o.idSolicitud);
+  for (const k of await kvClaves()) if (/^(pdf|dash_|mov_)/.test(String(k))) await kvDel(k);
+}
+
 async function limpiarPorCambioDeLibro(nuevo) {
   await colaVaciar();
   for (const k of await kvClaves()) if (/^(pdf|dash_|mov_)/.test(String(k))) await kvDel(k);
@@ -59,6 +65,8 @@ export function sincronizarTodo() {
       const antes = await kvGet('libroId');
       if (s.libro && antes && antes !== s.libro) await limpiarPorCambioDeLibro(s.libro);
       if (s.libro) await kvSet('libroId', s.libro);
+      // limpieza ÚNICA por libro: también para celulares que no conocían el libro anterior
+      if (s.libro && !(await kvGet('limpio_' + s.libro))) { await limpiarHistorialLocal(); await kvSet('limpio_' + s.libro, true); }
       await kvSet('datos', s);
       await kvSet('ultimaSync', ahoraISO());
       aplicar(s);
