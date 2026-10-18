@@ -243,6 +243,7 @@ async function vCliente(id) {
           ${s.ESTADO === 'Activo' && !pausaDe(s.ID_SERV) ? `<a class="mini" href="#/pausa/${esc(s.ID_SERV)}">Pausar</a>` : ''}
           ${pausaDe(s.ID_SERV) ? `<button class="mini verde" data-terminar="${esc(s.ID_SERV)}">${pausaDe(s.ID_SERV).ESTADO === 'Activa' ? 'Terminar pausa' : 'Cancelar pausa'}</button>` : ''}
           ${s.ESTADO === 'Activo' ? `<a class="mini rojo" href="#/corte/${esc(s.ID_SERV)}">Cortar</a>` : ''}
+          ${s.ESTADO === 'Activo' ? `<button class="mini" data-orden-corte="${esc(s.ID_SERV)}">${ic('documento')}Orden de corte</button>` : ''}
           ${s.ESTADO === 'Activo' && !s.PPPOE ? `<a class="mini" href="#/asignar/${esc(s.ID_SERV)}">Asignar PPPoE</a>` : ''}
           ${s.ESTADO === 'Cortado' ? `<button class="mini" data-aviso-corte="1">${ic('chat')}Aviso de corte</button>` : ''}
           ${(s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido') && !pausaDe(s.ID_SERV) ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
@@ -257,6 +258,18 @@ async function vCliente(id) {
     </section>`;
   $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, plantilla('MsgCobranza', id));
   vista().querySelectorAll('[data-aviso-corte]').forEach((b) => { b.onclick = () => enviarWhatsApp(id, plantilla('MsgCorte', id)); });
+  vista().querySelectorAll('[data-orden-corte]').forEach((b) => { b.onclick = async () => {
+    const sv = servicioPorId(b.dataset.ordenCorte);
+    const pend = (await ordenesLocales()).some((o) => o.estado === 'Pendiente' && o.tipo !== 'CAMBIO_PLAN' && o.items.some((it) => it.idServ === sv.ID_SERV && it.estado === 'Pendiente'));
+    if (pend) return aviso('Este servicio ya tiene un corte pendiente (orden u hoja de ruta).', 'error');
+    if (!(await confirmar(`${sv.CLIENTE} · ${sv.ID_SERV} · ${sv.PLAN}\nDeuda: ${soles(r.DEUDA_VENCIDA)}. El corte se registra cuando el técnico la marque como "Cortado".`,
+      { titulo: '¿Generar orden de corte?', si: 'Generar orden' }))) return;
+    const op = { tipo: 'CREAR_ORDEN', datos: { tipo: 'ORDEN_CORTE', items: [{ idServ: sv.ID_SERV, idCliente: id }] },
+      vista: { tipo: 'ORDEN_CORTE', datos: {}, items: [{ idServ: sv.ID_SERV, idCliente: id, snap: snapshotLocal(id, sv.ID_SERV) }] } };
+    await encolar(op);
+    aviso(navigator.onLine ? 'Orden de corte enviada.' : 'Orden guardada sin señal: ya puede imprimirla.');
+    location.hash = '#/orden/' + op.idSolicitud;
+  }; });
   vista().querySelectorAll('[data-terminar]').forEach((b) => { b.onclick = async () => {
     const pa = pausaDe(b.dataset.terminar), enCurso = pa.ESTADO === 'Activa';
     if (!(await confirmar(enCurso ? `El servicio vuelve a Activo hoy. Los días no usados (hasta el ${txtFecha(pa.F_FIN)}) se vuelven a cobrar.`
@@ -1288,8 +1301,8 @@ function vPausa(idServ) {
 // ============================================================================
 // ÓRDENES DE TRABAJO Y HOJAS DE RUTA (registro, documento imprimible, acciones del técnico)
 // ============================================================================
-const OT_TITULO = { CAMBIO_PLAN: 'ORDEN DE TRABAJO', RUTA_CORTE: 'HOJA DE RUTA DE CORTES' };
-const OT_NOMBRE = { CAMBIO_PLAN: 'Orden de trabajo · cambio de plan', RUTA_CORTE: 'Hoja de ruta de cortes' };
+const OT_TITULO = { CAMBIO_PLAN: 'ORDEN DE TRABAJO', RUTA_CORTE: 'HOJA DE RUTA DE CORTES', ORDEN_CORTE: 'ORDEN DE CORTE' };
+const OT_NOMBRE = { CAMBIO_PLAN: 'Orden de trabajo · cambio de plan', RUTA_CORTE: 'Hoja de ruta de cortes', ORDEN_CORTE: 'Orden de corte' };
 const chipOt = (e) => ({ Pendiente: 'e-porvencer', Completada: 'e-activo', Anulada: 'e-baja', Ejecutado: 'e-activo', 'No ejecutado': 'e-cortado', Anulado: 'e-baja' }[e] || 'e-pend');
 const enlaceMapa = (gps) => 'https://maps.google.com/?q=' + encodeURIComponent(String(gps).replace(/\s+/g, ''));
 
@@ -1319,6 +1332,7 @@ async function ordenesLocales() {
     const res = o.resultado || {};
     lista.push({ ref: o.idSolicitud, id: (res.datos && res.datos.idOt) || 'PROVISIONAL', solicitud: o.idSolicitud, tipo: o.vista.tipo, estado: 'Pendiente',
       fecha: o.fDispositivo, usuario: PERFIL.email, detalle: o.vista.tipo === 'RUTA_CORTE' ? o.vista.items.length + ' cliente(s) a cortar'
+        : o.vista.tipo === 'ORDEN_CORTE' ? 'Corte de ' + o.vista.items[0].idServ
         : `${o.vista.datos.planAnt} → ${o.vista.datos.plan}`, datos: o.vista.datos || {}, local: true,
       items: o.vista.items.map((x) => ({ idServ: x.idServ, idCliente: x.idCliente, estado: 'Pendiente', snap: x.snap })) });
   });
@@ -1345,7 +1359,7 @@ async function vOrdenes() {
     <div class="filtros">
       <label>Desde<input id="oDesde" type="date" value="${esc(f.desde)}"></label>
       <label>Hasta<input id="oHasta" type="date" value="${esc(f.hasta)}"></label>
-      <label>Tipo<select id="oTipo">${opt('', 'Todos', f.tipo)}${opt('CAMBIO_PLAN', 'Órdenes de trabajo', f.tipo)}${opt('RUTA_CORTE', 'Hojas de ruta', f.tipo)}</select></label>
+      <label>Tipo<select id="oTipo">${opt('', 'Todos', f.tipo)}${opt('CAMBIO_PLAN', 'Órdenes de trabajo', f.tipo)}${opt('ORDEN_CORTE', 'Órdenes de corte', f.tipo)}${opt('RUTA_CORTE', 'Hojas de ruta', f.tipo)}</select></label>
       <label>Estado<select id="oEstado">${opt('', 'Todos', f.estado)}${opt('Pendiente', 'Pendientes', f.estado)}${opt('Completada', 'Completadas', f.estado)}${opt('Anulada', 'Anuladas', f.estado)}</select></label>
     </div>
     <div id="oLista"></div>`;
@@ -1429,7 +1443,7 @@ function textoOrden(o) {
     l.push(`\n${o.tipo === 'RUTA_CORTE' ? (i + 1) + '. ' : ''}*${sn.n}* (${it.idCliente})`, `Dirección: ${sn.dir || '—'}${sn.ref ? ' (Ref.: ' + sn.ref + ')' : ''}`,
       `Zona: ${sn.zona || '—'} · Plan: ${sn.plan || '—'} · PPPoE: ${sn.pppoe || '—'}`, `Tel.: ${[sn.tel, sn.tel2].filter(Boolean).join(' / ') || '—'}`);
     if (sn.gps) l.push(`Mapa: ${enlaceMapa(sn.gps)}`);
-    if (o.tipo === 'RUTA_CORTE') l.push(`Deuda: ${soles(sn.deuda)} (${txtMora(sn.dias)})`);
+    if (o.tipo !== 'CAMBIO_PLAN') l.push(`Deuda: ${soles(sn.deuda)} (${txtMora(sn.dias)})`);
   });
   if (o.tipo === 'CAMBIO_PLAN') l.push(`\nCambio: ${o.datos.planAnt || ''} → *${o.datos.plan || ''}* (${soles(o.datos.tarifa)})`);
   return l.join('\n');
@@ -1449,7 +1463,7 @@ async function descargarDocumento(o) {
     <body>${htmlDocumento(o, logo)}</body></html>`;
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
   const a = document.createElement('a');
-  a.href = url; a.download = `${o.tipo === 'RUTA_CORTE' ? 'HojaRuta' : 'OrdenTrabajo'}_${o.id}_${String(o.fecha).slice(0, 10)}.html`;
+  a.href = url; a.download = `${({ RUTA_CORTE: 'HojaRuta', ORDEN_CORTE: 'OrdenCorte' })[o.tipo] || 'OrdenTrabajo'}_${o.id}_${String(o.fecha).slice(0, 10)}.html`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
@@ -1537,7 +1551,7 @@ async function vOrden(ref) {
 async function vMovimientos() {
   const hoy = hoyISO(), f = Object.assign({ anio: Number(hoy.slice(0, 4)), mes: Number(hoy.slice(5, 7)), tipo: '', zona: '' }, (await kvGet('filtrosMov')) || {});
   const opt = (v, t, sel) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(t)}</option>`;
-  const tipos = ['Corte', 'Suspensión', 'Pausa vacacional', 'Cambio de plan', 'Reactivación', 'Baja', 'Alta', 'Renovación', 'Orden de trabajo', 'Hoja de ruta', 'Otro'];
+  const tipos = ['Corte', 'Suspensión', 'Pausa vacacional', 'Cambio de plan', 'Reactivación', 'Baja', 'Alta', 'Renovación', 'Orden de trabajo', 'Orden de corte', 'Hoja de ruta', 'Otro'];
   const zonas = [...new Set(D.clientes.map((c) => c.ZONA).filter(Boolean))].sort();
   const a0 = Number(hoy.slice(0, 4));
   vista().innerHTML = `<h2>Reporte de movimientos</h2>
