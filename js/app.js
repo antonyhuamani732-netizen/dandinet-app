@@ -105,6 +105,7 @@ async function pintarEstado() {
 }
 
 function alEventoSync(info) {
+  if (info.tipo === 'libro') aviso('El sistema pasó al libro definitivo: se borraron los datos de prueba de este celular.');
   if (info.tipo === 'inicio') sincronizando = true;
   if (info.tipo === 'fin') { sincronizando = false; if (info.ok) refrescarSiCorresponde(); else manejarErrorSync(info.error); }
   pintarEstado();

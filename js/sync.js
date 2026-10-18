@@ -4,7 +4,7 @@
 // la conexión. Cada operación tiene un idSolicitud único: reenviarla nunca la duplica.
 import { CONFIG } from './config.js';
 import { llamar } from './api.js';
-import { kvGet, kvSet, colaPut, colaTodos } from './db.js';
+import { kvGet, kvSet, kvDel, kvClaves, colaPut, colaTodos, colaVaciar } from './db.js';
 import { aplicar, ahoraISO } from './datos.js';
 
 let _enCurso = null;
@@ -36,6 +36,17 @@ export async function pendientesDeEnvio() {
   return (await colaTodos()).filter((o) => o.estadoLocal === 'pendiente' || o.estadoLocal === 'enviado' || o.estadoLocal === 'error');
 }
 
+/**
+ * El sistema pasó a otro libro (ej. de PRUEBAS al DEFINITIVO): se borra lo guardado del anterior
+ * (cola, PDF, dashboard, reportes) para no mezclar números de recibo ni enviar operaciones de prueba.
+ */
+async function limpiarPorCambioDeLibro(nuevo) {
+  await colaVaciar();
+  for (const k of await kvClaves()) if (/^(pdf|dash_|mov_)/.test(String(k))) await kvDel(k);
+  await kvSet('libroId', nuevo);
+  avisar({ tipo: 'libro' });
+}
+
 /** Envía la cola y luego descarga datos frescos. Evita ejecuciones simultáneas. */
 export function sincronizarTodo() {
   if (_enCurso) return _enCurso;
@@ -45,6 +56,9 @@ export function sincronizarTodo() {
     try {
       await enviarCola();
       const s = await llamar('sincronizar');
+      const antes = await kvGet('libroId');
+      if (s.libro && antes && antes !== s.libro) await limpiarPorCambioDeLibro(s.libro);
+      if (s.libro) await kvSet('libroId', s.libro);
       await kvSet('datos', s);
       await kvSet('ultimaSync', ahoraISO());
       aplicar(s);
@@ -69,7 +83,7 @@ async function enviarCola() {
     });
     let r;
     try {
-      r = await llamar('enviarCola', { operaciones: envio });
+      r = await llamar('enviarCola', { operaciones: envio, libro: (await kvGet('libroId')) || '' });
     } catch (e) {
       if (e.codigo === 'RED') {
         // no salió por falta de señal: se marca como trabajo "sin señal" para que el
@@ -80,6 +94,7 @@ async function enviarCola() {
       }
       throw e;
     }
+    if (r.libroCambiado) { await limpiarPorCambioDeLibro(r.libro); return; }   // lo pendiente era del libro anterior
     for (const res of r.resultados) {
       const o = lote.find((x) => x.idSolicitud === res.idSolicitud);
       if (!o) continue;

@@ -34,6 +34,8 @@ export const kvDel = (k) => tx('kv', 'readwrite', (s) => s.delete(k));
 export const colaPut = (op) => tx('cola', 'readwrite', (s) => s.put(op));
 export const colaTodos = () => tx('cola', 'readonly', (s) => s.getAll());
 export const colaBorrar = (id) => tx('cola', 'readwrite', (s) => s.delete(id));
+export const kvClaves = () => tx('kv', 'readonly', (s) => s.getAllKeys());
+export const colaVaciar = () => tx('cola', 'readwrite', (s) => s.clear());
 
 /** Borra TODO lo guardado en el celular (al cerrar sesión). */
 export async function borrarTodo() {
