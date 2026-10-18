@@ -118,7 +118,7 @@ function manejarErrorSync(e) {
 
 function refrescarSiCorresponde() {
   const h = location.hash || '#/';
-  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa|orden)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
+  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa|orden|negocio)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
 }
 
 let _avisoT = null;
@@ -136,7 +136,7 @@ function enrutar() {
   RUTA = ruta;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
-    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos,
+    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos, negocio: vNegocio,
     mas: vMas, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
   cerrarModal();
@@ -716,7 +716,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -869,6 +869,7 @@ function vMas() {
     </ul>
     <h3>Ajustes</h3>
     <ul class="menu">
+      ${fila('#/negocio', 'editar', 'Datos del negocio y mensajes', 'RUC, dirección, cuentas y mensajes de WhatsApp')}
       ${fila('#/config', 'ajustes', 'Planes y listas', 'Tarifas, zonas, modos y métodos')}
       ${fila('#/cuenta', 'usuario', 'Mi cuenta', 'Sincronizar y cerrar sesión')}
     </ul>`;
@@ -998,6 +999,7 @@ function vPPPoE() {
       ${anteriores.length ? `<details class="hist"><summary>Usado antes por ${anteriores.length} cliente(s)</summary><ul>${anteriores.map((h) =>
         `<li><a href="#/cliente/${esc(h.ID_CLIENTE)}">${esc(h.ID_CLIENTE)} · ${esc(h.CLIENTE)}</a><small>${esc(txtFecha(h.F_DESDE)) || '¿?'} → ${esc(txtFecha(h.F_HASTA)) || 'hoy'}${h.MOTIVO_FIN ? ' · ' + esc(h.MOTIVO_FIN) : ''}</small></li>`).join('')}</ul></details>` : ''}</div>
       <div class="der"><span class="chip ${p.ESTADO === 'Disponible' ? 'e-activo' : p.ESTADO === 'Asignado' ? 'e-pend' : 'e-moroso'}">${esc(p.ESTADO)}</span>
+      <button class="mini" data-editar="${esc(p.CODIGO)}">Editar</button>
       ${p.ESTADO === 'Asignado' ? `<button class="mini" data-acc="LIBERAR_PPPOE" data-c="${esc(p.CODIGO)}">Liberar</button>` : ''}
       ${p.ESTADO === 'Disponible' ? `<button class="mini" data-acc="BLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Bloquear</button>` : ''}
       ${p.ESTADO === 'Bloqueado' ? `<button class="mini" data-acc="DESBLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Desbloquear</button>` : ''}</div></div></li>`;
@@ -1015,6 +1017,16 @@ function vPPPoE() {
     $('#ppTotal').textContent = lista.length > MAX ? `${lista.length} códigos · mostrando ${MAX}. Escriba más para afinar.` : `${lista.length} código(s)`;
     $('#ppLista').innerHTML = lista.slice(0, MAX).map(fila).join('') || '<li class="vacio">Sin códigos</li>';
     $('#ppFiltros').querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { filtro = b.dataset.f; pintar(); }; });
+    $('#ppLista').querySelectorAll('[data-editar]').forEach((b) => { b.onclick = async () => {
+      const p = D.pppoe.find((x) => String(x.CODIGO) === b.dataset.editar) || {};
+      const t = await pedirTexto('Titular de la cuenta (a nombre de quién está):', { titulo: `Editar PPPoE ${b.dataset.editar}`, valor: p.TITULAR || '', si: 'Guardar' });
+      if (t === null) return;
+      if (t.trim().length < 3) return aviso('Escriba el titular.', 'error');
+      await encolar({ tipo: 'EDITAR_PPPOE', codigoPPPoE: b.dataset.editar, datos: { titular: t.trim() } });
+      p.TITULAR = t.trim().toUpperCase();
+      aviso(navigator.onLine ? 'Guardado.' : 'Guardado: se enviará al volver la señal.');
+      pintar();
+    }; });
     $('#ppLista').querySelectorAll('[data-acc]').forEach((b) => { b.onclick = async () => {
       const acc = b.dataset.acc, cod = b.dataset.c;
       const texto = { LIBERAR_PPPOE: 'liberar (queda Disponible)', BLOQUEAR_PPPOE: 'bloquear', DESBLOQUEAR_PPPOE: 'desbloquear' }[acc];
@@ -1476,6 +1488,65 @@ async function vMovimientos() {
   ['#mA', '#mM', '#mT', '#mZ'].forEach((x) => { $(x).onchange = cargar; });
   $('#mImprimir').onclick = () => window.print();
   cargar();
+}
+
+// ---- DATOS DEL NEGOCIO Y MENSAJES (editables por el administrador) --------------------------
+const CAMPOS_NEGOCIO = [
+  ['Negocio', 'Nombre del negocio', 'text'], ['RUC', 'RUC (11 dígitos)', 'numeric'], ['Direccion', 'Dirección', 'text'],
+  ['Telefono', 'Celular del negocio', 'numeric'], ['Email', 'Correo', 'email'],
+];
+const CAMPOS_COBRO = [['Yape', 'N° Yape / Plin', 'numeric'], ['TitularCobro', 'Titular de las cuentas', 'text'], ['BCP', 'Cuenta BCP', 'numeric'], ['BN', 'Cuenta Banco de la Nación', 'numeric']];
+const MENSAJES = [
+  ['MsgCobranza', 'Recordatorio de pago (WhatsApp)'], ['MsgCorte', 'Aviso de corte (WhatsApp)'], ['MensajeRecibo', 'Mensaje al pie del recibo'],
+];
+const VARIABLES = [['{NOMBRE}', 'nombre'], ['{DEUDA}', 'deuda'], ['{MESES}', 'meses'], ['{PERIODOS}', 'meses que debe'], ['{DIA}', 'día de pago'],
+  ['{YAPE}', 'Yape'], ['{TITULAR}', 'titular'], ['{BCP}', 'BCP'], ['{BN}', 'B. Nación'], ['{NEGOCIO}', 'negocio']];
+
+function vNegocio() {
+  const cfg = D.config, txt = (k) => String(cfg[k] || '').replace(/\\n/g, '\n');
+  const campo = ([k, etq, tipo]) => `<label>${esc(etq)}<input data-k="${k}" value="${esc(txt(k))}" ${tipo === 'numeric' ? 'inputmode="numeric"' : tipo === 'email' ? 'type="email"' : ''} autocomplete="off"></label>`;
+  // cliente de ejemplo para la vista previa: el primero con deuda
+  const ej = Object.values(D.resumen).find((r) => Number(r.DEUDA_VENCIDA) > 0) || Object.values(D.resumen)[0] || {};
+  vista().innerHTML = `<section class="form"><h2>Datos del negocio y mensajes</h2>
+    <p class="sub">Salen en los recibos, órdenes, hojas de ruta y mensajes de WhatsApp. Los cambios se aplican al sincronizar.</p>
+    <h3>Negocio</h3>${CAMPOS_NEGOCIO.map(campo).join('')}
+    <h3>Cuentas para recibir pagos</h3>${CAMPOS_COBRO.map(campo).join('')}
+    <h3>Mensajes</h3>
+    <p class="sub">Toque una variable para insertarla donde está el cursor. Se reemplaza por el dato de cada cliente.</p>
+    ${MENSAJES.map(([k, etq]) => `<label>${esc(etq)}<textarea data-k="${k}" rows="${k === 'MensajeRecibo' ? 2 : 7}">${esc(txt(k))}</textarea></label>
+      ${k !== 'MensajeRecibo' ? `<div class="chips vars">${VARIABLES.map(([v, d]) => `<button type="button" class="mini" data-var="${v}" data-para="${k}" title="${esc(d)}">${v}</button>`).join('')}</div>
+      <details class="previa"><summary>Vista previa con ${esc(ej.NOMBRES || 'un cliente')}</summary><pre data-previa="${k}"></pre></details>` : ''}`).join('')}
+    <button class="btn grande verde" id="ok">${ic('check')}Guardar cambios</button>
+    <a class="btn secundario" href="#/mas">Cancelar</a></section>`;
+  const valor = (k) => (vista().querySelector(`[data-k="${k}"]`) || {}).value || '';
+  const previa = () => vista().querySelectorAll('[data-previa]').forEach((pre) => {
+    const k = pre.dataset.previa, guard = cfg[k];
+    const temp = Object.assign({}, cfg); CAMPOS_COBRO.concat(CAMPOS_NEGOCIO).forEach(([c]) => { temp[c] = valor(c); });
+    D.config = Object.assign({}, temp, { [k]: valor(k) });
+    pre.textContent = plantilla(k, ej.ID_CLIENTE);
+    D.config = cfg; cfg[k] = guard;
+  });
+  vista().querySelectorAll('[data-k]').forEach((el) => { el.oninput = previa; });
+  vista().querySelectorAll('[data-var]').forEach((b) => { b.onclick = () => {
+    const ta = vista().querySelector(`[data-k="${b.dataset.para}"]`), ini = ta.selectionStart ?? ta.value.length, fin = ta.selectionEnd ?? ini;
+    ta.value = ta.value.slice(0, ini) + b.dataset.var + ta.value.slice(fin);
+    ta.focus(); ta.selectionStart = ta.selectionEnd = ini + b.dataset.var.length; previa();
+  }; });
+  previa();
+  $('#ok').onclick = async () => {
+    const valores = {};
+    CAMPOS_NEGOCIO.concat(CAMPOS_COBRO).concat(MENSAJES).forEach(([k]) => { const v = valor(k).trim(); if (v !== txt(k).trim()) valores[k] = v; });
+    if (!Object.keys(valores).length) return aviso('No hay cambios.');
+    // mismas validaciones que el servidor
+    if ('RUC' in valores && valores.RUC && !/^(10|15|17|20)\d{9}$/.test(valores.RUC)) return aviso('RUC: 11 dígitos que empiecen con 10, 15, 17 o 20.', 'error');
+    for (const k of ['Telefono', 'Yape']) if (k in valores && valores[k] && !/^9\d{8}$/.test(valores[k])) return aviso('Celular: 9 dígitos que empiecen con 9.', 'error');
+    if ('Email' in valores && valores.Email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(valores.Email)) return aviso('Correo inválido.', 'error');
+    if (!(await confirmar(Object.keys(valores).join(', '), { titulo: '¿Guardar estos cambios?', si: 'Guardar' }))) return;
+    await encolar({ tipo: 'GUARDAR_CONFIG', datos: { valores } });
+    Object.assign(D.config, valores);
+    aviso(navigator.onLine ? 'Guardado. Los recibos nuevos ya salen con estos datos.' : 'Guardado: se enviará al volver la señal.');
+    location.hash = '#/mas';
+  };
 }
 
 function vAsignarPPPoE(idServ) {

@@ -340,6 +340,12 @@ nav.inferior .insignia { position: absolute; top: 8px; left: calc(50% + 6px); mi
 .calculo { margin: var(--e-4) 0 0; padding: var(--e-4); }
 .calculo table { margin: var(--e-2) 0; }
 .calculo td:last-child { white-space: nowrap; }
+textarea { resize: vertical; line-height: 1.45; }
+.vars { margin: var(--e-2) 0; }
+.vars .mini { min-height: 36px; padding: var(--e-1) var(--e-3); font-size: var(--t-xs); font-family: var(--f-mono); }
+.previa { margin: 0 0 var(--e-2); font-size: var(--t-sm); }
+.previa summary { cursor: pointer; color: var(--c-enlace); font-weight: var(--w-semi); min-height: 36px; display: flex; align-items: center; }
+.previa pre { white-space: pre-wrap; font-family: var(--f-sans); background: var(--c-superficie-2); border-radius: var(--r-md); padding: var(--e-3); margin: var(--e-1) 0 0; }
 .hist { margin-top: var(--e-2); font-size: var(--t-xs); }
 .hist summary { cursor: pointer; color: var(--c-enlace); font-weight: var(--w-semi); min-height: 32px; display: flex; align-items: center; }
 .hist ul { list-style: none; margin: var(--e-1) 0 0; padding: 0 0 0 var(--e-3); border-left: 2px solid var(--c-linea); }
