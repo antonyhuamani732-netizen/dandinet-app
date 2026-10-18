@@ -244,9 +244,11 @@ async function vCliente(id) {
           ${pausaDe(s.ID_SERV) ? `<button class="mini verde" data-terminar="${esc(s.ID_SERV)}">${pausaDe(s.ID_SERV).ESTADO === 'Activa' ? 'Terminar pausa' : 'Cancelar pausa'}</button>` : ''}
           ${s.ESTADO === 'Activo' ? `<a class="mini rojo" href="#/corte/${esc(s.ID_SERV)}">Cortar</a>` : ''}
           ${s.ESTADO === 'Activo' && !s.PPPOE ? `<a class="mini" href="#/asignar/${esc(s.ID_SERV)}">Asignar PPPoE</a>` : ''}
+          ${s.ESTADO === 'Cortado' ? `<button class="mini" data-aviso-corte="1">${ic('chat')}Aviso de corte</button>` : ''}
           ${(s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido') && !pausaDe(s.ID_SERV) ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
         </div>`).join('') || '<p class="vacio">Sin servicios</p>'}
       ${bloqueRenovar(id, r)}
+      <div id="otCliente"></div>
       <h3>Últimos pagos</h3>
       <ul class="lista compacta" id="listaPagos">${pagos.map((p) => `<li><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(txtPeriodos(p.PERIODOS))}</small></div>
         <div class="der">${soles(p.MONTO)}${p.ESTADO === 'Anulado' ? '<small class="error">ANULADO</small>' : ''}
@@ -254,6 +256,7 @@ async function vCliente(id) {
       <div id="zonaPdf"></div>
     </section>`;
   $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, plantilla('MsgCobranza', id));
+  vista().querySelectorAll('[data-aviso-corte]').forEach((b) => { b.onclick = () => enviarWhatsApp(id, plantilla('MsgCorte', id)); });
   vista().querySelectorAll('[data-terminar]').forEach((b) => { b.onclick = async () => {
     const pa = pausaDe(b.dataset.terminar), enCurso = pa.ESTADO === 'Activa';
     if (!(await confirmar(enCurso ? `El servicio vuelve a Activo hoy. Los días no usados (hasta el ${txtFecha(pa.F_FIN)}) se vuelven a cobrar.`
@@ -263,6 +266,15 @@ async function vCliente(id) {
     b.disabled = true;
     aviso(navigator.onLine ? 'Enviado.' : 'Guardado: se enviará al volver la señal.');
   }; });
+  ordenesLocales().then((lista) => {
+    const mias = lista.filter((o) => o.items.some((it) => it.idCliente === id)).slice(0, 10);
+    const cont = $('#otCliente');
+    if (!cont || !mias.length) return;
+    cont.innerHTML = `<h3>Órdenes y hojas de ruta</h3><ul class="lista">${mias.map((o) => { const it = o.items.find((x) => x.idCliente === id);
+      return `<li><a href="#/orden/${encodeURIComponent(o.ref)}"><div><b>${esc(o.id)}</b> · ${esc(OT_NOMBRE[o.tipo] || o.tipo)}
+        <small>${esc(txtFecha(o.fecha))} · ${esc(it.estado)}${it.obs ? ' · ' + esc(it.obs) : ''}</small></div>
+        <div class="der"><span class="chip ${chipOt(o.estado)}">${esc(o.estado)}</span></div></a></li>`; }).join('')}</ul>`;
+  });
   const bRen = $('#btnRenovar');
   if (bRen && !bRen.disabled) bRen.onclick = async () => {
     const anio = Number(bRen.dataset.anio);
@@ -836,22 +848,93 @@ function vReactivar(idServ) {
   const disp = pppoeDisponibles();
   const r = D.resumen[s.ID_CLIENTE] || {};
   const propio = s.PPPOE ? [s.PPPOE] : [];
+  const planes = D.planes.filter((p) => p.ACTIVO !== 'No' || p.PLAN === s.PLAN);
   vista().innerHTML = `<section class="form"><h2>Reactivar servicio</h2>
     <p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.ESTADO)} · PPPoE anterior ${esc(s.PPPOE_ANT || '-')}</p>
-    ${Number(r.DEUDA_VENCIDA) > 0 ? `<p class="aviso error">Aún debe ${soles(r.DEUDA_VENCIDA)}. <a href="#/cobrar/${esc(s.ID_CLIENTE)}">Cobrar primero</a></p>` : ''}
-    <label>PPPoE<select id="ppp"><option value="">(sin PPPoE)</option>${propio.concat(disp).map((p) =>
-      `<option ${p === (s.PPPOE || s.PPPOE_ANT) ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
-    <label>Tarifa mensual (S/)<input id="tarifa" type="number" step="0.10" value="${Number(s.TARIFA) || ''}"></label>
+    ${Number(r.DEUDA_VENCIDA) > 0 ? `<p class="aviso error">Aún debe ${soles(r.DEUDA_VENCIDA)}. <a href="#/cobrar/${esc(s.ID_CLIENTE)}">Cobrar primero</a> (puede reactivar igual).</p>` : ''}
+    <label>Plan<select id="plan">${planes.map((p) => `<option data-t="${Number(p.TARIFA)}" ${p.PLAN === s.PLAN ? 'selected' : ''}>${esc(p.PLAN)}</option>`).join('')}</select></label>
+    <label>Tarifa mensual (S/)<input id="tarifa" type="number" step="0.10" inputmode="decimal" value="${Number(s.TARIFA) || ''}"></label>
+    <label>Fecha de reactivación<input id="fecha" type="date" value="${hoyISO()}" max="${hoyISO()}"></label>
+    <label>PPPoE<select id="ppp"><option value="">(sin PPPoE)</option>${propio.concat(disp).map((p) => optPPPoE(p, p === (s.PPPOE || s.PPPOE_ANT))).join('')}</select></label>
+    <div id="pror"></div>
+    <label class="check"><input type="checkbox" id="manual"> Modificar el monto del primer mes manualmente</label>
+    <div id="manualWrap" hidden><label>Monto del primer mes (S/)<div class="fila"><input id="primer" type="number" step="0.10" inputmode="decimal">
+      <button type="button" class="mini" id="redondear">Redondear</button></div></label></div>
     <label>Motivo<input id="motivo" value="Reactivación por pago"></label>
-    <button class="btn grande verde" id="ok">REACTIVAR</button>
+    <button class="btn grande verde" id="ok">${ic('check')}Reactivar</button>
     <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
+  let calc = null, mesCobrado = false;
+  const tarifa = () => Number($('#tarifa').value || 0);
+  const pintar = () => {
+    const fe = $('#fecha').value || hoyISO(), mes = fe.slice(0, 7);
+    // si la cuota de ese mes sigue vigente (ej. se cortó este mismo mes cobrándolo) no se prorratea
+    mesCobrado = D.cargos.some((k) => k.ID_SERV === s.ID_SERV && k.CONCEPTO === 'MENSUALIDAD' && String(k.PERIODO).startsWith(mes));
+    calc = prorrateoPlan(0, tarifa(), fe);
+    const dia = Number(fe.slice(8, 10));
+    $('#pror').innerHTML = !(tarifa() > 0) ? '' : mesCobrado
+      ? `<p class="aviso">La cuota de ${esc(txtPeriodo(fe))} ya existe (el corte fue este mismo mes): se mantiene como está.</p>`
+      : `<div class="hero calculo"><span class="eyebrow">Primer mes · ${esc(txtPeriodo(fe))} (${calc.diasMes} días)</span>
+        <table class="periodos"><tbody><tr><td>${dia === 1 ? 'Mes completo' : calc.restantes + ' día(s) desde el ' + esc(txtFecha(fe))}</td><td>${soles(calc.conNueva)}</td></tr></tbody></table>
+        <p class="sub">Desde el mes siguiente: ${soles(tarifa())} al mes.</p></div>`;
+    $('#manual').closest('label').hidden = mesCobrado;
+    if (!$('#manual').checked) $('#primer').value = calc.conNueva.toFixed(2);
+  };
+  $('#plan').onchange = (e) => { const o = e.target.selectedOptions[0]; if (o && o.dataset.t) $('#tarifa').value = o.dataset.t; pintar(); };
+  $('#tarifa').oninput = pintar;
+  $('#fecha').onchange = pintar;
+  $('#manual').onchange = () => { $('#manualWrap').hidden = !$('#manual').checked; if (!$('#manual').checked) pintar(); };
+  $('#redondear').onclick = () => { $('#primer').value = Math.round(Number($('#primer').value || 0)).toFixed(2); };
+  pintar();
   $('#ok').onclick = async () => {
-    if (!(await confirmar(`${s.ID_SERV} de ${s.CLIENTE}`, { titulo: '¿Reactivar servicio?', si: 'Reactivar' }))) return;
-    await encolar({ tipo: 'REACTIVAR', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, codigoPPPoE: $('#ppp').value,
-      tarifa: $('#tarifa').value, motivo: $('#motivo').value.trim() || 'Reactivación', fecha: hoyISO() });
+    if (!(tarifa() > 0)) return aviso('La tarifa debe ser mayor a 0.', 'error');
+    const fe = $('#fecha').value || hoyISO(), manual = $('#manual').checked && !mesCobrado, primer = Number($('#primer').value);
+    if (manual && !(primer >= 0)) return aviso('Escriba el monto del primer mes.', 'error');
+    const cambioPlan = $('#plan').value !== s.PLAN;
+    if (!(await confirmar(`${s.ID_SERV} de ${s.CLIENTE}\n${cambioPlan ? s.PLAN + ' → ' : ''}${$('#plan').value} · ${soles(tarifa())}/mes` +
+      (mesCobrado ? '' : `\nPrimer mes (${txtPeriodo(fe)}): ${soles(manual ? primer : calc.conNueva)}`), { titulo: '¿Reactivar servicio?', si: 'Reactivar' }))) return;
+    await encolar({ tipo: 'REACTIVAR', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, codigoPPPoE: $('#ppp').value, plan: $('#plan').value,
+      tarifa: tarifa(), motivo: $('#motivo').value.trim() || 'Reactivación', fecha: fe,
+      datos: manual ? { prorratear: true, montoPrimerMes: r2(primer) } : { prorratear: true } });
     aviso(navigator.onLine ? 'Enviado. Se aplicará en segundos.' : 'Guardado sin señal: se enviará al volver la conexión.');
     location.hash = '#/cliente/' + s.ID_CLIENTE;
   };
+}
+
+/** Desde el inventario: elegir a qué cliente (servicio activo sin PPPoE) se asigna un código Disponible. */
+function asignarDesdePPPoE(cod, alTerminar) {
+  const p = D.pppoe.find((x) => String(x.CODIGO) === String(cod)) || {};
+  const libres = D.servicios.filter((s) => s.ESTADO === 'Activo' && !s.PPPOE);
+  const m = modal(`<h3 id="dlgT">Asignar ${esc(cod)}</h3><p class="sub">Titular: ${esc(p.TITULAR || '-')}. Solo se muestran servicios activos sin PPPoE (${libres.length}).</p>
+    <input id="asQ" class="buscador" type="search" placeholder="Nombre, DNI, código o zona" autocomplete="off" aria-label="Buscar cliente">
+    <ul class="lista" id="asRes"></ul><button class="btn secundario" id="asNo">Cancelar</button>`);
+  const pintarRes = () => {
+    const q = $('#asQ').value.trim().toLowerCase();
+    const lista = libres.filter((s) => { const c = D.porId[s.ID_CLIENTE] || {};
+      return !q || [s.CLIENTE, s.ID_CLIENTE, s.ID_SERV, c.DNI_RUC, c.ZONA, s.PLAN].some((v) => String(v || '').toLowerCase().includes(q)); }).slice(0, 40);
+    $('#asRes').innerHTML = lista.map((s) => `<li><a href="#" data-serv="${esc(s.ID_SERV)}"><div><b>${esc(s.CLIENTE)}</b>
+      <small>${esc(s.ID_CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.PLAN)} · ${esc((D.porId[s.ID_CLIENTE] || {}).ZONA || '')}</small></div>${ic('flecha', 'fin')}</a></li>`).join('')
+      || '<li class="vacio">Ningún servicio activo sin PPPoE coincide.</li>';
+    $('#asRes').querySelectorAll('[data-serv]').forEach((a) => { a.onclick = async (e) => {
+      e.preventDefault();
+      const s = servicioPorId(a.dataset.serv);
+      cerrarModal();
+      if (!(await confirmar(`${cod} (${p.TITULAR || 'sin titular'})\n→ ${s.CLIENTE} · ${s.ID_SERV}`, { titulo: '¿Asignar este PPPoE?', si: 'Asignar' }))) return;
+      await encolar({ tipo: 'ASIGNAR_PPPOE', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, codigoPPPoE: cod, fecha: hoyISO() });
+      p.ESTADO = 'Asignado'; p.CLIENTE = s.CLIENTE; p.ID_CLIENTE = s.ID_CLIENTE; s.PPPOE = cod;
+      aviso(navigator.onLine ? 'Asignado.' : 'Guardado: se enviará al volver la señal.');
+      if (alTerminar) alTerminar();
+    }; });
+  };
+  $('#asQ').addEventListener('input', pintarRes);
+  $('#asNo').onclick = cerrarModal;
+  pintarRes();
+  $('#asQ').focus();
+}
+
+/** Opción de PPPoE con su titular (el valor sigue siendo solo el código). */
+function optPPPoE(cod, sel = false) {
+  const p = D.pppoe.find((x) => String(x.CODIGO) === String(cod)) || {};
+  return `<option value="${esc(cod)}" ${sel ? 'selected' : ''}>${esc(cod)}${p.TITULAR ? ' · ' + esc(p.TITULAR) : ''}</option>`;
 }
 
 // ---- MÁS -------------------------------------------------------------------------------
@@ -907,7 +990,7 @@ function vFormCliente(id) {
       <label>Plan *<select id="s_plan"><option value="">— elegir —</option>${planes.map((p) => `<option data-t="${Number(p.TARIFA)}">${esc(p.PLAN)}</option>`).join('')}</select></label>
       <label>Tarifa mensual (S/)<input id="s_tarifa" type="number" step="0.10" inputmode="decimal"></label>
       <label>Modo / equipo<select id="s_modo"><option value=""></option>${lst('MODO').map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
-      <label>PPPoE<select id="s_pppoe"><option value="">(sin PPPoE)</option>${pppoeDisponibles().map((p) => `<option>${esc(p)}</option>`).join('')}</select></label>
+      <label>PPPoE<select id="s_pppoe"><option value="">(sin PPPoE)</option>${pppoeDisponibles().map((p) => optPPPoE(p)).join('')}</select></label>
       <label>Fecha de inicio<input id="s_inicio" type="date" value="${hoyISO()}"></label>
       <label>Instalación (S/)<input id="s_inst" type="number" step="0.10" inputmode="decimal" value="0"></label>
       <p class="sub">El primer mes se prorratea según el día de instalación; las cuotas se generan hasta diciembre.</p>`}
@@ -1002,6 +1085,7 @@ function vPPPoE() {
       <div class="der"><span class="chip ${p.ESTADO === 'Disponible' ? 'e-activo' : p.ESTADO === 'Asignado' ? 'e-pend' : 'e-moroso'}">${esc(p.ESTADO)}</span>
       <button class="mini" data-editar="${esc(p.CODIGO)}">Editar</button>
       ${p.ESTADO === 'Asignado' ? `<button class="mini" data-acc="LIBERAR_PPPOE" data-c="${esc(p.CODIGO)}">Liberar</button>` : ''}
+      ${p.ESTADO === 'Disponible' ? `<button class="mini verde" data-asignar="${esc(p.CODIGO)}">Asignar</button>` : ''}
       ${p.ESTADO === 'Disponible' ? `<button class="mini" data-acc="BLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Bloquear</button>` : ''}
       ${p.ESTADO === 'Bloqueado' ? `<button class="mini" data-acc="DESBLOQUEAR_PPPOE" data-c="${esc(p.CODIGO)}">Desbloquear</button>` : ''}</div></div></li>`;
   };
@@ -1018,6 +1102,7 @@ function vPPPoE() {
     $('#ppTotal').textContent = lista.length > MAX ? `${lista.length} códigos · mostrando ${MAX}. Escriba más para afinar.` : `${lista.length} código(s)`;
     $('#ppLista').innerHTML = lista.slice(0, MAX).map(fila).join('') || '<li class="vacio">Sin códigos</li>';
     $('#ppFiltros').querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { filtro = b.dataset.f; pintar(); }; });
+    $('#ppLista').querySelectorAll('[data-asignar]').forEach((b) => { b.onclick = () => asignarDesdePPPoE(b.dataset.asignar, pintar); });
     $('#ppLista').querySelectorAll('[data-editar]').forEach((b) => { b.onclick = async () => {
       const p = D.pppoe.find((x) => String(x.CODIGO) === b.dataset.editar) || {};
       const t = await pedirTexto('Titular de la cuenta (a nombre de quién está):', { titulo: `Editar PPPoE ${b.dataset.editar}`, valor: p.TITULAR || '', si: 'Guardar' });
@@ -1251,7 +1336,9 @@ async function ordenesLocales() {
 
 // ---- REGISTRO: filtros por fechas; las pendientes siempre visibles --------------------------
 async function vOrdenes() {
-  const hoy = hoyISO(), f = Object.assign({ desde: hoy.slice(0, 8) + '01', hasta: hoy, tipo: '', estado: '' }, (await kvGet('filtrosOrdenes')) || {});
+  const hoy = hoyISO(), hace3 = new Date(hoy + 'T12:00:00'); hace3.setMonth(hace3.getMonth() - 3);
+  const f = Object.assign({ desde: hace3.toISOString().slice(0, 8) + '01', hasta: hoy, tipo: '', estado: '' }, (await kvGet('filtrosOrdenes')) || {});
+  if (f.hasta < hoy) f.hasta = hoy;                    // el historial siempre llega hasta hoy
   const opt = (v, t, sel) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(t)}</option>`;
   vista().innerHTML = `<h2>Órdenes y hojas de ruta</h2>
     <p class="sub">Las pendientes aparecen siempre, hasta que se completen o se anulen.</p>
@@ -1278,7 +1365,7 @@ async function vOrdenes() {
     const periodo = todas.filter((o) => o.estado !== 'Pendiente' && (!f.estado || o.estado === f.estado) && (!f.desde || dia(o) >= f.desde) && (!f.hasta || dia(o) <= f.hasta));
     $('#oLista').innerHTML = (!f.estado || f.estado === 'Pendiente' ? `<h3>Pendientes (${pend.length})</h3>
       <ul class="lista">${pend.map(fila).join('') || '<li class="vacio">No hay órdenes pendientes.</li>'}</ul>` : '') +
-      (f.estado !== 'Pendiente' ? `<h3>Cerradas del ${esc(txtFecha(f.desde))} al ${esc(txtFecha(f.hasta))} (${periodo.length})</h3>
+      (f.estado !== 'Pendiente' ? `<h3>Historial: completadas y anuladas del ${esc(txtFecha(f.desde))} al ${esc(txtFecha(f.hasta))} (${periodo.length})</h3>
       <ul class="lista">${periodo.map(fila).join('') || '<li class="vacio">Nada en esas fechas.</li>'}</ul>` : '');
   };
   ['#oDesde', '#oHasta', '#oTipo', '#oEstado'].forEach((x) => { $(x).onchange = pintar; });
@@ -1555,7 +1642,7 @@ function vAsignarPPPoE(idServ) {
   if (!s) { vista().innerHTML = '<p class="error">Servicio no encontrado.</p>'; return; }
   const disp = pppoeDisponibles();
   vista().innerHTML = `<section class="form"><h2>Asignar PPPoE</h2><p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.PLAN)}</p>
-    ${disp.length ? `<label>Código disponible<select id="ppp">${disp.map((p) => `<option>${esc(p)}</option>`).join('')}</select></label>
+    ${disp.length ? `<label>Código disponible<select id="ppp">${disp.map((p) => optPPPoE(p)).join('')}</select></label>
     <button class="btn grande verde" id="ok">ASIGNAR</button>` : '<p class="aviso">No hay códigos disponibles. Agregue uno en PPPoE.</p>'}
     <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
   if (disp.length) $('#ok').onclick = async () => {
