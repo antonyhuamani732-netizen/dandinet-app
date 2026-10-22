@@ -255,6 +255,15 @@ div.aviso { display: block; }
 .cargo .chip { grid-area: e; justify-self: start; }
 .cargo b { grid-area: m; font-weight: var(--w-semi); }
 .cargo.futuro { background: var(--c-superficie-2); }
+/* Mes con varios servicios (INTERNET + CATV): una fila del mes; "Cobrar solo uno" muestra cada servicio */
+.mes-grupo { border-bottom: 1px solid var(--c-linea); }
+.mes-grupo:last-child { border-bottom: 0; }
+.mes-grupo .cargo { border-bottom: 0; }
+.mes-grupo.futuro, .mes-grupo.futuro .cargo:not(:has(input:checked)) { background: var(--c-superficie-2); }
+.mes-grupo .hijos { border-top: 1px dashed var(--c-linea); }
+.cargo.hijo { padding-left: var(--e-10); min-height: 52px; }
+.cargo.hijo .per { font-size: var(--t-sm); }
+.mes-grupo > .cargo .det { white-space: normal; }
 .total { display: flex; justify-content: space-between; align-items: baseline; margin: var(--e-4) 0 var(--e-2); color: var(--c-tenue); }
 .total b { font-size: var(--t-xl); color: var(--c-tinta); font-variant-numeric: tabular-nums; }
 

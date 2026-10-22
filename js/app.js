@@ -7,6 +7,7 @@ import { encolar, sincronizarTodo, iniciarAutoSync, alCambiar, pendientesDeEnvio
 import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
   cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
+  nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -213,7 +214,7 @@ async function vCliente(id) {
       <h2>${esc(c.NOMBRES)}</h2>
       <p class="sub">${esc(id)} · DNI/RUC ${esc(c.DNI_RUC)} · <span class="chip ${claseEstado(r.ESTADO)}">${esc(r.ESTADO)}</span></p>
       <div class="deuda ${Number(r.DEUDA_VENCIDA) > 0 ? 'roja' : 'verde'}">
-        <span>Deuda vencida</span><b>${soles(r.DEUDA_VENCIDA)}</b><small>${r.MESES_ADEUDA || 0} cuota(s) vencida(s) · ${Number(r.DIAS_ATRASO) > 0 ? txtMora(r.DIAS_ATRASO) + ' de atraso' : 'al día'}${r.ALERTA ? ' · ' + esc(r.ALERTA) : ''}</small>
+        <span>Deuda vencida</span><b>${soles(r.DEUDA_VENCIDA)}</b><small>${r.MESES_ADEUDA || 0} mes(es) vencido(s) ·${Number(r.DIAS_ATRASO) > 0 ? txtMora(r.DIAS_ATRASO) + ' de atraso' : 'al día'}${r.ALERTA ? ' · ' + esc(r.ALERTA) : ''}</small>
       </div>
       ${enCola.length ? `<p class="aviso">${ic('reloj')}<span>${enCola.length} operación(es) de este cliente en cola de envío.</span></p>` : ''}
       <a class="btn grande verde" href="#/cobrar/${esc(id)}">${ic('cobrar')}Cobrar</a>
@@ -260,12 +261,15 @@ async function vCliente(id) {
   vista().querySelectorAll('[data-aviso-corte]').forEach((b) => { b.onclick = () => enviarWhatsApp(id, plantilla('MsgCorte', id)); });
   vista().querySelectorAll('[data-orden-corte]').forEach((b) => { b.onclick = async () => {
     const sv = servicioPorId(b.dataset.ordenCorte);
-    const pend = (await ordenesLocales()).some((o) => o.estado === 'Pendiente' && o.tipo !== 'CAMBIO_PLAN' && o.items.some((it) => it.idServ === sv.ID_SERV && it.estado === 'Pendiente'));
+    // cliente DUO (INTERNET + CATV): el corte es del cliente completo → la orden lleva sus dos servicios
+    const servs = /DUO/i.test(sv.MODO) ? serviciosDe(id).filter((s) => s.ESTADO === 'Activo' && /DUO/i.test(s.MODO)) : [sv];
+    const pend = (await ordenesLocales()).some((o) => o.estado === 'Pendiente' && o.tipo !== 'CAMBIO_PLAN' &&
+      o.items.some((it) => servs.some((s) => s.ID_SERV === it.idServ) && it.estado === 'Pendiente'));
     if (pend) return aviso('Este servicio ya tiene un corte pendiente (orden u hoja de ruta).', 'error');
-    if (!(await confirmar(`${sv.CLIENTE} · ${sv.ID_SERV} · ${sv.PLAN}\nDeuda: ${soles(r.DEUDA_VENCIDA)}. El corte se registra cuando el técnico la marque como "Cortado".`,
+    if (!(await confirmar(`${sv.CLIENTE} · ${servs.map((s) => s.ID_SERV + ' ' + nombreServicio(s.PLAN)).join(' + ')}\nDeuda: ${soles(r.DEUDA_VENCIDA)}. El corte se registra cuando el técnico la marque como "Cortado".`,
       { titulo: '¿Generar orden de corte?', si: 'Generar orden' }))) return;
-    const op = { tipo: 'CREAR_ORDEN', datos: { tipo: 'ORDEN_CORTE', items: [{ idServ: sv.ID_SERV, idCliente: id }] },
-      vista: { tipo: 'ORDEN_CORTE', datos: {}, items: [{ idServ: sv.ID_SERV, idCliente: id, snap: snapshotLocal(id, sv.ID_SERV) }] } };
+    const op = { tipo: 'CREAR_ORDEN', datos: { tipo: 'ORDEN_CORTE', items: servs.map((s) => ({ idServ: s.ID_SERV, idCliente: id })) },
+      vista: { tipo: 'ORDEN_CORTE', datos: {}, items: servs.map((s) => ({ idServ: s.ID_SERV, idCliente: id, snap: snapshotLocal(id, s.ID_SERV) })) } };
     await encolar(op);
     aviso(navigator.onLine ? 'Orden de corte enviada.' : 'Orden guardada sin señal: ya puede imprimirla.');
     location.hash = '#/orden/' + op.idSolicitud;
@@ -331,16 +335,39 @@ async function vCobrar(id) {
     .flatMap((o) => o.cargos || []));
   const hoyMes = hoyISO().slice(0, 7);
   const todos = cargosDe(id).filter((k) => !enCola.has(k.ID_CARGO));
-  const fila = (k) => {
-    const futuro = String(k.PERIODO).slice(0, 7) > hoyMes;
-    const marcado = !futuro;   // por defecto: vencidos y del mes
-    return `<label class="cargo ${futuro ? 'futuro' : ''}" ${futuro ? 'data-futuro="1"' : ''}>
+  // Un cliente con INTERNET y CATV (dos servicios) se cobra como uno: una fila por MES que marca ambos.
+  // "Cobrar solo uno" muestra cada servicio por separado (ej.: pagó solo el internet).
+  const pagadoTxt = (k) => (Number(k.PAGADO) > 0 ? ' · pagado ' + soles(k.PAGADO) : '');
+  const filaCargo = (k, marcado, hijo) => `<label class="cargo ${hijo ? 'hijo' : ''}">
       <input type="checkbox" value="${esc(k.ID_CARGO)}" data-saldo="${Number(k.SALDO)}" ${marcado ? 'checked' : ''}>
-      <span class="per">${esc(txtPeriodo(k.PERIODO))}</span>
-      <span class="det">${esc(k.CONCEPTO === 'MENSUALIDAD' ? k.PLAN : k.CONCEPTO)}${Number(k.PAGADO) > 0 ? ' · pagado ' + soles(k.PAGADO) : ''}</span>
+      <span class="per">${hijo ? esc(nombreCorto(k)) : esc(txtPeriodo(k.PERIODO))}</span>
+      <span class="det">${hijo ? esc(txtPeriodo(k.PERIODO)) : esc(nombreCargo(k))}${pagadoTxt(k)}</span>
       <span class="chip ${claseEstado(k.ESTADO)}">${esc(k.ESTADO)}</span>
       <b>${soles(k.SALDO)}</b></label>`;
+  const gravedad = ['Vencido', 'Parcial', 'Por vencer', 'Pendiente'];
+  const rango = (e) => (gravedad.indexOf(e) + 1) || 99;
+  const peor = (l) => l.map((k) => k.ESTADO).sort((a, b) => rango(a) - rango(b))[0];   // el chip del mes muestra el estado más grave
+  const meses = [];
+  todos.forEach((k) => {
+    const ym = String(k.PERIODO).slice(0, 7), u = meses[meses.length - 1];
+    if (u && u.ym === ym) u.cargos.push(k); else meses.push({ ym, cargos: [k] });
+  });
+  const grupo = (g, n) => {
+    const futuro = g.ym > hoyMes, marcado = !futuro;   // por defecto: vencidos y del mes
+    const attrs = `class="mes-grupo ${futuro ? 'futuro' : ''}" ${futuro ? 'data-futuro="1"' : ''}`;
+    if (g.cargos.length === 1) return `<div ${attrs}>${filaCargo(g.cargos[0], marcado, false)}</div>`;
+    const saldo = r2(g.cargos.reduce((s, k) => s + Number(k.SALDO), 0)), est = peor(g.cargos);
+    return `<div ${attrs}>
+      <label class="cargo">
+        <input type="checkbox" class="todo-mes" ${marcado ? 'checked' : ''} aria-label="Todo ${esc(txtPeriodo(g.ym))}">
+        <span class="per">${esc(txtPeriodo(g.ym))}</span>
+        <span class="det">${g.cargos.map((k) => esc(nombreCorto(k)) + ' ' + soles(k.SALDO).slice(3)).join(' + ')}</span>
+        <span class="chip ${claseEstado(est)}">${esc(est)}</span>
+        <b>${soles(saldo)}</b></label>
+      <div class="hijos" id="hijos${n}" hidden>${g.cargos.map((k) => filaCargo(k, marcado, true)).join('')}</div>
+    </div>`;
   };
+  const hayGrupos = meses.some((g) => g.cargos.length > 1);
   vista().innerHTML = `
     <section class="cobro">
       <h2>Cobrar · ${esc(c.NOMBRES)}</h2>
@@ -351,8 +378,10 @@ async function vCobrar(id) {
         <button type="button" class="mini" id="selTodo">Todo</button>
         <button type="button" class="mini" id="selNada">Ninguno</button>
         <label class="mini check"><input type="checkbox" id="verFut"> Adelantar meses</label>
+        ${hayGrupos ? '<label class="mini check"><input type="checkbox" id="porServ"> Ver por servicio</label>' : ''}
       </div>
-      <div id="cargos" class="cargos">${todos.map(fila).join('') || '<p class="vacio">No tiene meses pendientes.</p>'}</div>
+      ${hayGrupos ? '<p class="sub">Cada mes cobra INTERNET y CATV juntos. Si paga solo uno, marque "Ver por servicio".</p>' : ''}
+      <div id="cargos" class="cargos">${meses.map(grupo).join('') || '<p class="vacio">No tiene meses pendientes.</p>'}</div>
       <div class="total">Seleccionado: <b id="tSel">S/ 0.00</b></div>
       <label>Monto recibido (S/)<input id="monto" type="number" inputmode="decimal" step="0.10" min="0"></label>
       <p id="avisoMonto" class="aviso" hidden></p>
@@ -365,12 +394,21 @@ async function vCobrar(id) {
       <button class="btn grande verde" id="btnCobrar">${ic('check')}Registrar cobro</button>
       <a class="btn secundario" href="#/cliente/${esc(id)}">Cancelar</a>
     </section>`;
-  const cajas = () => [...document.querySelectorAll('#cargos input[type=checkbox]')];
-  const visibles = () => cajas().filter((x) => !x.closest('label').hidden);
-  const futuros = () => cajas().filter((x) => x.closest('label').dataset.futuro);
-  futuros().forEach((x) => { x.closest('label').hidden = true; x.checked = false; });
-  const total = () => r2(cajas().filter((x) => x.checked && !x.closest('label').hidden).reduce((s, x) => s + Number(x.dataset.saldo), 0));
+  // cajas = una por cargo (las de los servicios); las casillas "todo el mes" solo marcan sus cargos
+  const cajas = () => [...document.querySelectorAll('#cargos input[data-saldo]')];
+  const visibles = () => cajas().filter((x) => !x.closest('.mes-grupo').hidden);
+  const gruposFut = () => [...document.querySelectorAll('#cargos .mes-grupo[data-futuro]')];
+  const futuros = () => cajas().filter((x) => x.closest('.mes-grupo').dataset.futuro);
+  const sincronizarMeses = () => document.querySelectorAll('#cargos .todo-mes').forEach((m) => {
+    const hs = [...m.closest('.mes-grupo').querySelectorAll('input[data-saldo]')], n = hs.filter((x) => x.checked).length;
+    m.checked = n === hs.length; m.indeterminate = n > 0 && n < hs.length;
+  });
+  gruposFut().forEach((g) => { g.hidden = true; });
+  futuros().forEach((x) => { x.checked = false; });
+  sincronizarMeses();
+  const total = () => r2(visibles().filter((x) => x.checked).reduce((s, x) => s + Number(x.dataset.saldo), 0));
   const recalc = (ponerMonto = true) => {
+    sincronizarMeses();
     const t = total();
     $('#tSel').textContent = soles(t);
     if (ponerMonto) $('#monto').value = t ? t.toFixed(2) : '';
@@ -382,12 +420,23 @@ async function vCobrar(id) {
     if (m > t + 0.004) { a.hidden = false; a.classList.add('error'); a.textContent = 'El monto supera lo seleccionado. Marque más meses (o "Adelantar meses").'; }
     else if (m > 0 && m < t - 0.004) { a.hidden = false; a.textContent = `PAGO PARCIAL: quedará un saldo de ${soles(t - m)} (se aplica del mes más antiguo al más nuevo).`; }
   };
-  $('#cargos').addEventListener('change', () => recalc());
+  $('#cargos').addEventListener('change', (e) => {
+    if (e.target.classList.contains('todo-mes'))
+      e.target.closest('.mes-grupo').querySelectorAll('input[data-saldo]').forEach((x) => { x.checked = e.target.checked; });
+    recalc();
+  });
+  if ($('#porServ')) $('#porServ').onchange = (e) => {
+    document.querySelectorAll('#cargos .hijos').forEach((h) => { h.hidden = !e.target.checked; });
+  };
   $('#monto').addEventListener('input', validarMonto);
-  $('#selVenc').onclick = () => { visibles().forEach((x) => { x.checked = !x.closest('label').dataset.futuro; }); recalc(); };
+  $('#selVenc').onclick = () => { visibles().forEach((x) => { x.checked = !x.closest('.mes-grupo').dataset.futuro; }); recalc(); };
   $('#selTodo').onclick = () => { visibles().forEach((x) => { x.checked = true; }); recalc(); };
   $('#selNada').onclick = () => { cajas().forEach((x) => { x.checked = false; }); recalc(); };
-  $('#verFut').onchange = (e) => { futuros().forEach((x) => { x.closest('label').hidden = !e.target.checked; if (!e.target.checked) x.checked = false; }); recalc(); };
+  $('#verFut').onchange = (e) => {
+    gruposFut().forEach((g) => { g.hidden = !e.target.checked; });
+    if (!e.target.checked) futuros().forEach((x) => { x.checked = false; });
+    recalc();
+  };
   $('#metodo').onchange = () => {
     const ef = $('#metodo').value === 'Efectivo';
     $('#opWrap').style.display = ef ? 'none' : ''; $('#fotoWrap').style.display = ef ? 'none' : '';
@@ -402,18 +451,19 @@ async function vCobrar(id) {
   recalc();
 
   $('#btnCobrar').onclick = async () => {
-    const sel = cajas().filter((x) => x.checked && !x.closest('label').hidden);
+    const sel = visibles().filter((x) => x.checked);
     const monto = r2($('#monto').value || 0), t = total(), metodo = $('#metodo').value;
     if (!sel.length) return aviso('Marque al menos un mes.', 'error');
     if (!(monto > 0)) return aviso('Ingrese el monto recibido.', 'error');
     if (monto > t + 0.004) return aviso('El monto supera lo seleccionado.', 'error');
     if (metodo !== 'Efectivo' && !$('#operacion').value.trim() &&
         !(await confirmar(`No ingresó N° de operación de ${metodo}.`, { titulo: '¿Registrar de todos modos?', si: 'Registrar' }))) return;
-    const cargosSel = D.cargos.filter((k) => sel.some((x) => x.value === k.ID_CARGO))
-      .sort((a, b) => String(a.PERIODO).localeCompare(String(b.PERIODO)));
+    // mismo orden que el servidor: por mes y, dentro del mes, INTERNET antes que CATV
+    const cargosSel = D.cargos.filter((k) => sel.some((x) => x.value === k.ID_CARGO)).sort(ordenCargos);
     const reparto = repartir(cargosSel, monto);
+    const lineas = agruparLineas(reparto.map((x) => ({ per: String(x.cargo.PERIODO).slice(0, 7), base: nombreCargo(x.cargo), monto: x.aplicado, parcial: x.parcial })));
     if (!(await confirmar(`${c.NOMBRES}\nMétodo: ${metodo}\n` +
-        reparto.map((x) => `· ${txtPeriodo(x.cargo.PERIODO)}: ${soles(x.aplicado)}${x.parcial ? ' (parcial)' : ''}`).join('\n'),
+        lineas.map((l) => `· ${l.periodo} ${l.detalle}: ${soles(l.monto)}${l.parcial ? ' (parcial)' : ''}`).join('\n'),
         { titulo: `Registrar ${soles(monto)}${monto < t - 0.004 ? ' (parcial)' : ''}`, si: 'Registrar cobro' }))) return;
     $('#btnCobrar').disabled = true;
     const op = {
@@ -423,7 +473,7 @@ async function vCobrar(id) {
       reciboProvisional: await siguienteProvisional(PERFIL.iniciales),
       // copia para mostrar el comprobante aunque no haya señal
       vista: { cliente: c.NOMBRES, doc: c.DNI_RUC, zona: c.ZONA, telefono: c.TELEFONO, usuario: PERFIL.nombre,
-        detalle: reparto.map((x) => ({ periodo: txtPeriodo(x.cargo.PERIODO), concepto: x.cargo.CONCEPTO === 'MENSUALIDAD' ? x.cargo.PLAN : x.cargo.CONCEPTO,
+        detalle: reparto.map((x) => ({ periodo: txtPeriodo(x.cargo.PERIODO), per: String(x.cargo.PERIODO).slice(0, 7), concepto: nombreCargo(x.cargo),
           aplicado: x.aplicado, parcial: x.parcial })),
         saldoAntes: Number((D.resumen[id] || {}).DEUDA_TOTAL || 0) },
     };
@@ -441,9 +491,11 @@ async function vRecibo(idSol) {
   const nro = oficial ? res.nroRecibo : op.reciboProvisional;
   const rech = op.estadoLocal === 'rechazado';
   const cfg = D.config;
+  // meses seguidos del mismo servicio en una línea, igual que el recibo PDF ("SERVICIO DE INTERNET · 3 meses")
+  const lineas = agruparLineas((v.detalle || []).map((d) => ({ per: d.per, periodo: d.periodo, base: nombreServicio(d.concepto), monto: d.aplicado, parcial: d.parcial })));
   const texto = `*${cfg.Negocio || 'D@NDINET'}* — ${oficial ? 'RECIBO DE PAGO' : 'RECIBO PROVISIONAL'} ${nro}\n` +
     `Fecha: ${txtFecha(op.fechaPago)}\nCliente: ${v.cliente}\n` +
-    v.detalle.map((d) => `• ${d.periodo} ${d.concepto}: ${soles(d.aplicado)}${d.parcial ? ' (parcial)' : ''}`).join('\n') +
+    lineas.map((d) => `• ${d.periodo} ${d.detalle}: ${soles(d.monto)}${d.parcial ? ' (parcial)' : ''}`).join('\n') +
     `\n*TOTAL: ${soles(op.monto)}* · ${op.metodo}${op.operacion ? ' Op. ' + op.operacion : ''}\n` +
     (oficial ? '' : 'El número oficial se asignará al sincronizar.\n') + (cfg.MensajeRecibo || '');
   vista().innerHTML = `
@@ -455,7 +507,7 @@ async function vRecibo(idSol) {
       <dl><dt>Fecha</dt><dd>${esc(txtFecha(op.fechaPago))}</dd><dt>Cliente</dt><dd>${esc(v.cliente)}</dd>
         <dt>DNI/RUC</dt><dd>${esc(v.doc)}</dd><dt>Atendió</dt><dd>${esc(v.usuario)}</dd></dl>
       <table><thead><tr><th>Periodo</th><th>Detalle</th><th>Pagado</th></tr></thead><tbody>
-        ${v.detalle.map((d) => `<tr><td>${esc(d.periodo)}</td><td>${esc(d.concepto)}${d.parcial ? ' <small>(parcial)</small>' : ''}</td><td>${soles(d.aplicado)}</td></tr>`).join('')}
+        ${lineas.map((d) => `<tr><td>${esc(d.periodo)}</td><td>${esc(d.detalle)}${d.parcial ? ' <small>(parcial)</small>' : ''}</td><td>${soles(d.monto)}</td></tr>`).join('')}
       </tbody></table>
       <div class="totalr">TOTAL <b>${soles(op.monto)}</b></div>
       <p class="sub">${esc(op.metodo)}${op.operacion ? ' · Op. ' + esc(op.operacion) : ''}</p>
@@ -574,14 +626,14 @@ async function enviarWhatsApp(idCliente, mensaje) {
 async function prepararPdf(nro, zona) {
   const pago = D.pagos.find((x) => x.N_RECIBO === nro);
   const estado = pago ? pago.ESTADO : 'Válido';
-  let r = await kvGet('pdf2_' + nro);
+  let r = await kvGet('pdf3_' + nro);
   if (!r || r.estado !== estado) {          // no está guardado o cambió (por ejemplo, se anuló)
     if (!navigator.onLine) return aviso('Se necesita señal para generar el PDF la primera vez.', 'error');
     zona.innerHTML = '<p class="aviso">Generando el PDF de ' + esc(nro) + '… (solo la primera vez)</p>';
     try {
       r = await llamar('comprobante', { nro });
       r.estado = estado;
-      await kvSet('pdf2_' + nro, r);
+      await kvSet('pdf3_' + nro, r);
     } catch (e) {
       zona.innerHTML = `<p class="aviso error">${esc(e.message)}</p><button class="btn" id="btnPdfR">Reintentar</button>`;
       $('#btnPdfR').onclick = () => prepararPdf(nro, zona);
