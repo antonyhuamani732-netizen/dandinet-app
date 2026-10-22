@@ -218,7 +218,7 @@ td, .der, .val, .cargo b { font-variant-numeric: tabular-nums; }
 .deuda.verde { background: var(--c-ok-fondo); box-shadow: none; }
 .deuda.verde b { color: var(--c-ok); }
 /* acciones rápidas de la ficha: 3 en una fila, ícono sobre texto */
-.ficha .botones { grid-template-columns: repeat(3, 1fr); gap: var(--e-2); }
+.ficha .botones { grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: var(--e-2); }
 .ficha .botones .btn { flex-direction: column; gap: var(--e-1); min-height: 68px; padding: var(--e-2); border-radius: var(--r-lg); font-size: var(--t-sm); }
 .ficha .botones .btn .ic { color: var(--c-primario); }
 dl { display: grid; grid-template-columns: 104px 1fr; gap: var(--e-3); margin: 0; background: var(--c-superficie); padding: var(--e-4); border-radius: var(--r-lg); box-shadow: var(--s-1); }
@@ -275,6 +275,9 @@ label.check input { width: 20px; height: 20px; margin: 0; flex-shrink: 0; accent
 fieldset.paquete { margin: var(--e-4) 0 0; padding: var(--e-2) var(--e-4) var(--e-3); border: 1px solid var(--c-linea); border-radius: var(--r-md); min-width: 0; }
 fieldset.paquete legend { padding: 0 var(--e-2); font-size: var(--t-sm); font-weight: var(--w-medio); color: var(--c-tinta-2); }
 fieldset.paquete .sub { margin: var(--e-2) 0 0; }
+/* ajuste de cuenta: lista de meses con casilla */
+.lista-cargos label.check { border-bottom: 1px solid var(--c-linea); margin: 0; padding: var(--e-1) 0; }
+.lista-cargos label.check > span { display: flex; flex-wrap: wrap; gap: var(--e-1) var(--e-2); align-items: center; }
 input:not([type=checkbox]):not([type=radio]), select, textarea {
   display: block; width: 100%; min-height: 48px; margin-top: var(--e-1); padding: var(--e-3) var(--e-4); font: inherit; font-size: var(--t-md);
   border-radius: var(--r-md); border: 1px solid var(--c-borde-campo); background: var(--c-superficie); color: var(--c-tinta);

@@ -120,7 +120,7 @@ function manejarErrorSync(e) {
 
 function refrescarSiCorresponde() {
   const h = location.hash || '#/';
-  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa|orden|negocio)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
+  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa|orden|negocio|ajustar)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
 }
 
 let _avisoT = null;
@@ -138,7 +138,7 @@ function enrutar() {
   RUTA = ruta;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
-    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos, negocio: vNegocio,
+    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, ajustar: vAjustar, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos, negocio: vNegocio,
     mas: vMas, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   window.scrollTo(0, 0);
   cerrarModal();
@@ -223,6 +223,7 @@ async function vCliente(id) {
         ${c.TELEFONO ? `<a class="btn" href="tel:${esc(c.TELEFONO)}">${ic('telefono')}Llamar</a>` : ''}
         <button class="btn" id="btnRecordatorio">${ic('chat')}Recordatorio</button>
         <a class="btn" href="#/editar/${esc(id)}">${ic('editar')}Editar</a>
+        <a class="btn" href="#/ajustar/${esc(id)}">${ic('ajustes')}Ajustar</a>
       </div>
       <h3>Datos</h3>
       <dl>
@@ -254,6 +255,9 @@ async function vCliente(id) {
         </div>`).join('') || '<p class="vacio">Sin servicios</p>'}
       ${bloqueRenovar(id, r)}
       <div id="otCliente"></div>
+      ${(() => { const aj = (D.ajustes || []).filter((a) => a.ID_CLIENTE === id).slice(-6).reverse();
+        return aj.length ? `<h3>Ajustes de cuenta</h3><ul class="lista compacta">${aj.map((a) => `<li><div><b>${esc(AJ_NOMBRE[a.TIPO] || a.TIPO)} · ${esc(txtPeriodo(a.PERIODO))}</b>
+          <small>${esc(txtFecha(a.FECHA))} · ${esc(a.MOTIVO)}</small></div><div class="der">${soles(a.MONTO_ANTES)} → ${Number(a.MONTO_DESPUES) > 0 ? soles(a.MONTO_DESPUES) : 'anulado'}</div></li>`).join('')}</ul>` : ''; })()}
       <h3>Últimos pagos</h3>
       <ul class="lista compacta" id="listaPagos">${pagos.map((p) => `<li><div><b>${esc(p.N_RECIBO)}</b><small>${esc(txtFecha(p.FECHA))} · ${esc(p.METODO)} · ${esc(txtPeriodos(p.PERIODOS))}</small></div>
         <div class="der">${soles(p.MONTO)}${p.ESTADO === 'Anulado' ? '<small class="error">ANULADO</small>' : ''}
@@ -809,7 +813,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', AJUSTAR_CARGOS: 'Ajuste de cuenta', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -1367,6 +1371,104 @@ function vCambiarPlan(idServ) {
       fecha: $('#fec').value, datos: manual ? { prorrateo: true, ajuste: r2(ajuste) } : { prorrateo: true } });
     aviso(navigator.onLine ? 'Cambio de plan enviado.' : 'Guardado sin señal: se enviará al volver la conexión.');
     location.hash = '#/cliente/' + s.ID_CLIENTE;
+  };
+}
+
+// ---- AJUSTE DE CUENTA (descuento, perdón, anulación, cambio de monto) -----------------------
+// Lo ya pagado no se toca; el servidor (Ajustes.gs) vuelve a validar todo y deja el registro en la tabla Ajustes.
+const AJ_NOMBRE = { DESCUENTO: 'Descuento', PERDON: 'Perdón', ANULACION: 'Anulación', CAMBIO_MONTO: 'Cambio de monto' };
+const AJ_MOTIVOS = ['Falla del servicio', 'Descuento comercial', 'Cortesía', 'Error de cobro / precio', 'Acuerdo con el cliente', 'Otro'];
+
+/** Igual que op_ajustarCargos: monto nuevo y si queda anulado, o el error que daría el servidor. */
+function calcularAjuste(k, tipo, valor) {
+  const monto = r2(Number(k.MONTO) || 0), pag = r2(Number(k.PAGADO) || 0), saldo = r2(Math.max(0, monto - pag));
+  const mes = txtPeriodo(k.PERIODO);
+  if (tipo === 'DESC_S' || tipo === 'DESC_P') {
+    const d = tipo === 'DESC_P' ? r2(saldo * valor / 100) : r2(valor);
+    if (tipo === 'DESC_P' && valor > 100) return { error: 'El porcentaje no puede pasar de 100.' };
+    if (!(d > 0)) return { error: 'Escriba el descuento.' };
+    if (d > saldo + 0.004) return { error: `${mes}: el descuento (${soles(d)}) es mayor que lo que falta pagar (${soles(saldo)}).` };
+    const nuevo = r2(monto - d);
+    return { nuevo, anular: nuevo <= 0.004 && pag <= 0.004 };
+  }
+  if (tipo === 'PERDON') return { nuevo: pag, anular: pag <= 0.004 };
+  if (tipo === 'ANULACION') return pag > 0.004 ? { error: `${mes} tiene pagos (${soles(pag)}): anule primero el recibo o use "Perdonar saldo".` } : { nuevo: 0, anular: true };
+  if (!(valor >= 0) || isNaN(valor)) return { error: 'Escriba el monto nuevo.' };
+  if (valor < pag - 0.004) return { error: `${mes}: el monto nuevo es menor que lo ya pagado (${soles(pag)}).` };
+  if (Math.abs(valor - monto) < 0.005) return { error: `${mes} ya vale ${soles(monto)}.` };
+  return { nuevo: r2(valor), anular: valor <= 0.004 && pag <= 0.004 };
+}
+
+function vAjustar(id) {
+  const c = D.porId[id];
+  if (!c) { vista().innerHTML = '<p class="error">Cliente no encontrado.</p>'; return; }
+  const cargos = cargosDe(id);
+  const saldoTot = cargos.reduce((t, k) => t + Number(k.SALDO || 0), 0);
+  vista().innerHTML = `<section class="form"><h2>Ajustar cuenta</h2>
+    <p class="sub">${esc(c.NOMBRES)} · ${esc(id)} · falta pagar ${soles(saldoTot)}</p>
+    <p class="aviso">${ic('alerta')}<span>Para descuentos, perdones o corregir precios. Lo ya pagado no cambia y todo queda registrado con su motivo.</span></p>
+    ${cargos.length ? `<h3>¿Qué meses?</h3>
+    ${cargos.length > 1 ? `<label class="check"><input type="checkbox" id="ajTodos"> <b>Marcar todos (${cargos.length})</b></label>` : ''}
+    <div class="lista-cargos">${cargos.map((k) => `<label class="check"><input type="checkbox" class="ajK" value="${esc(k.ID_CARGO)}">
+      <span>${esc(txtPeriodo(k.PERIODO))} · ${esc(nombreCorto(k))} · ${soles(k.MONTO)}${Number(k.PAGADO) > 0 ? ` <small>(pagado ${soles(k.PAGADO)})</small>` : ''}
+      <span class="chip ${claseEstado(k.ESTADO)}">${esc(k.ESTADO)}</span></span></label>`).join('')}</div>
+    <label>Tipo de ajuste<select id="ajTipo">
+      <option value="DESC_S">Descuento en soles (por cada mes)</option><option value="DESC_P">Descuento en % (de lo que falta pagar)</option>
+      <option value="PERDON">Perdonar lo que falta pagar</option><option value="ANULACION">Anular el mes (sin pagos)</option>
+      <option value="CAMBIO">Cambiar el monto del mes</option></select></label>
+    <label id="ajValWrap"><span id="ajValTxt">Descuento (S/)</span><input id="ajVal" type="number" step="0.10" inputmode="decimal"></label>
+    <label>Motivo<select id="ajMot">${AJ_MOTIVOS.map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+    <label>Detalle del motivo<input id="ajDet" placeholder="Ej.: sin señal del 3 al 10 de octubre"></label>
+    <div id="ajPrev"></div>
+    <button class="btn grande verde" id="ok">${ic('check')}Registrar ajuste</button>` : '<p class="vacio">Este cliente no tiene montos pendientes que ajustar.</p>'}
+    <a class="btn secundario" href="#/cliente/${esc(id)}">Cancelar</a></section>`;
+  if (!cargos.length) return;
+  const elegidos = () => [...vista().querySelectorAll('.ajK:checked')].map((x) => cargos.find((k) => k.ID_CARGO === x.value));
+  const tipoTx = { DESC_S: 'Descuento (S/)', DESC_P: 'Descuento (%)', CAMBIO: 'Monto nuevo del mes (S/)' };
+  let plan = null;
+  const pintar = () => {
+    const tipo = $('#ajTipo').value, valor = Number($('#ajVal').value);
+    $('#ajValWrap').hidden = !tipoTx[tipo];
+    $('#ajValTxt').textContent = tipoTx[tipo] || '';
+    const sel = elegidos();
+    plan = null;
+    if (!sel.length) { $('#ajPrev').innerHTML = '<p class="sub">Marque uno o más meses.</p>'; return; }
+    const filasP = sel.map((k) => ({ k, r: calcularAjuste(k, tipo, valor) }));
+    const err = filasP.find((x) => x.r.error);
+    if (err) { $('#ajPrev').innerHTML = `<p class="aviso error">${esc(err.r.error)}</p>`; return; }
+    const antes = filasP.reduce((t, x) => t + Number(x.k.SALDO || 0), 0);
+    const despues = filasP.reduce((t, x) => t + (x.r.anular ? 0 : Math.max(0, x.r.nuevo - Number(x.k.PAGADO || 0))), 0);
+    plan = filasP;
+    $('#ajPrev').innerHTML = `<div class="hero calculo"><span class="eyebrow">Vista previa</span>
+      <table class="periodos"><tbody>${filasP.map((x) => `<tr><td>${esc(txtPeriodo(x.k.PERIODO))} ${esc(nombreCorto(x.k))}</td>
+        <td>${soles(x.k.MONTO)} → ${x.r.anular ? 'anulado' : soles(x.r.nuevo)}</td></tr>`).join('')}</tbody></table>
+      <div class="totalr">Falta pagar ${soles(antes)} → <b>${soles(despues)}</b></div>
+      <p class="sub">${despues < antes ? 'La empresa deja de cobrar ' + soles(antes - despues) + '.' : 'El cliente pagará ' + soles(despues - antes) + ' más.'}</p></div>`;
+  };
+  vista().querySelectorAll('.ajK').forEach((x) => { x.onchange = pintar; });
+  if ($('#ajTodos')) $('#ajTodos').onchange = () => { vista().querySelectorAll('.ajK').forEach((x) => { x.checked = $('#ajTodos').checked; }); pintar(); };
+  $('#ajTipo').onchange = () => { $('#ajVal').value = ''; pintar(); };
+  $('#ajVal').oninput = pintar;
+  pintar();
+  $('#ok').onclick = async () => {
+    pintar();
+    if (!plan) return aviso(elegidos().length ? 'Revise el ajuste: hay un error.' : 'Marque al menos un mes.', 'error');
+    const det = $('#ajDet').value.trim(), motivo = $('#ajMot').value + (det ? ': ' + det : '');
+    if ($('#ajMot').value === 'Otro' && det.length < 5) return aviso('Escriba el detalle del motivo.', 'error');
+    const tipo = $('#ajTipo').value, valor = Number($('#ajVal').value);
+    const items = plan.map((x) => {
+      const it = { idCargo: x.k.ID_CARGO };
+      if (tipo === 'DESC_S') Object.assign(it, { tipo: 'DESCUENTO', monto: r2(valor) });
+      else if (tipo === 'DESC_P') Object.assign(it, { tipo: 'DESCUENTO', porcentaje: r2(valor) });
+      else if (tipo === 'CAMBIO') Object.assign(it, { tipo: 'CAMBIO_MONTO', monto: r2(valor) });
+      else it.tipo = tipo;
+      return it;
+    });
+    const resumen = plan.map((x) => `${txtPeriodo(x.k.PERIODO)} ${nombreCorto(x.k)}: ${soles(x.k.MONTO)} → ${x.r.anular ? 'anulado' : soles(x.r.nuevo)}`).join('\n');
+    if (!(await confirmar(`${c.NOMBRES}\n${resumen}\nMotivo: ${motivo}`, { titulo: '¿Registrar el ajuste?', si: 'Registrar' }))) return;
+    await encolar({ tipo: 'AJUSTAR_CARGOS', idCliente: id, motivo, datos: { items } });
+    aviso(navigator.onLine ? 'Ajuste enviado. Se aplicará en segundos.' : 'Guardado sin señal: se enviará al volver la conexión.');
+    location.hash = '#/cliente/' + id;
   };
 }
 

@@ -27,6 +27,7 @@ export function aplicar(s) {
   D.pppoe = aObjetos(s.pppoe);
   D.histPPPoE = aObjetos(s.histPPPoE);
   D.suspensiones = aObjetos(s.suspensiones);
+  D.ajustes = aObjetos(s.ajustes);                 // ajustes de cuenta de los últimos 13 meses (desde la v1.18)
   // órdenes de trabajo / hojas de ruta (desde la v1.11); DATOS y SNAPSHOT vienen como texto JSON
   const json = (t) => { try { return JSON.parse(t || '{}'); } catch (e) { return {}; } };
   D.ordenes = aObjetos(s.ordenes).map((o) => Object.assign(o, { DATOS: json(o.DATOS) }));
