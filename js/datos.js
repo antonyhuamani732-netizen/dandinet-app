@@ -109,6 +109,20 @@ export const serviciosDe = (id) => D.servicios.filter((s) => s.ID_CLIENTE === id
  */
 export const nombreServicio = (plan) => String(plan || '')
   .replace(/\s*\d+(?:[.,]\d+)?\s*(?:mbps|mbp|mb|megas?)\b\.?/gi, '').replace(/\s{2,}/g, ' ').trim();
+/**
+ * Paquete DUO de un cliente (INTERNET + CATV que actúan como uno): servicios no dados de baja, por plan.
+ * Devuelve { internet: [serv], catv: [serv], todos: [serv] } o null si el cliente no tiene ambos.
+ * Igual que serviciosDuo en apps-script/Duo.gs (si cambia uno, cambie el otro).
+ */
+export function serviciosDuo(idCliente) {
+  const inet = [], catv = [];
+  D.servicios.filter((s) => s.ID_CLIENTE === idCliente && s.ESTADO !== 'Baja').forEach((s) => {
+    const n = nombreServicio(s.PLAN);
+    if (/CATV/i.test(n) && !/INTERNET/i.test(n)) catv.push(s);
+    else if (/INTERNET/i.test(n)) inet.push(s);
+  });
+  return inet.length && catv.length ? { internet: inet, catv, todos: inet.concat(catv) } : null;
+}
 /** Texto de un cargo: "SERVICIO DE INTERNET", "SERVICIO DE CATV", "INSTALACION", "AJUSTE PLAN". */
 export const nombreCargo = (k) => (k.CONCEPTO === 'MENSUALIDAD' ? nombreServicio(k.PLAN) : String(k.CONCEPTO || ''));
 /** Versión corta para filas estrechas: "INTERNET", "CATV". */

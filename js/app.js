@@ -7,7 +7,7 @@ import { encolar, sincronizarTodo, iniciarAutoSync, alCambiar, pendientesDeEnvio
 import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
   cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
-  nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas,
+  nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas, serviciosDuo,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -207,6 +207,7 @@ async function vCliente(id) {
   const c = D.porId[id];
   if (!c) { vista().innerHTML = '<p class="error">Cliente no encontrado.</p>'; return; }
   const r = D.resumen[id] || {}, priv = D.privados[id] || {};
+  const duo = serviciosDuo(id);          // INTERNET + CATV: se muestran y cobran como uno
   const pagos = D.pagos.filter((p) => p.ID_CLIENTE === id).slice(-8).reverse();
   const enCola = (await colaTodos()).filter((o) => o.idCliente === id && o.estadoLocal !== 'ok' && o.estadoLocal !== 'rechazado');
   vista().innerHTML = `
@@ -234,6 +235,7 @@ async function vCliente(id) {
         ${priv.USUARIO_ROUTER || priv.CLAVE_ROUTER ? `<dt>Router</dt><dd>${esc(priv.USUARIO_ROUTER)} / <span class="secreto">${esc(priv.CLAVE_ROUTER)}</span></dd>` : ''}
       </dl>
       <h3>Servicios</h3>
+      ${duo ? `<p class="aviso">${ic('check')}<span><b>Paquete DUO:</b> ${duo.todos.map((s) => esc(nombreCorto({ CONCEPTO: 'MENSUALIDAD', PLAN: s.PLAN })) + ' ' + soles(s.TARIFA)).join(' + ')} = <b>${soles(duo.todos.reduce((t, s) => t + Number(s.TARIFA || 0), 0))}</b>/mes. Se cobra y se corta como un solo cliente; para dejar solo uno use <b>Cortar → Baja</b> en el servicio que se quita.</span></p>` : ''}
       ${serviciosDe(id).map((s) => `
         <div class="servicio">
           <div class="serv-cab"><div><b>${esc(s.PLAN)}</b><small>${esc(s.ID_SERV)} · ${esc(s.MODO)} · ${soles(s.TARIFA)}/mes · PPPoE ${esc(s.PPPOE || '-')}</small>
@@ -246,6 +248,7 @@ async function vCliente(id) {
           ${s.ESTADO === 'Activo' ? `<a class="mini rojo" href="#/corte/${esc(s.ID_SERV)}">Cortar</a>` : ''}
           ${s.ESTADO === 'Activo' ? `<button class="mini" data-orden-corte="${esc(s.ID_SERV)}">${ic('documento')}Orden de corte</button>` : ''}
           ${s.ESTADO === 'Activo' && !s.PPPOE ? `<a class="mini" href="#/asignar/${esc(s.ID_SERV)}">Asignar PPPoE</a>` : ''}
+          ${s.ESTADO === 'Activo' && !duo && /INTERNET/i.test(nombreServicio(s.PLAN)) ? `<button class="mini" data-agregar-catv="${esc(s.ID_SERV)}">Agregar TV cable</button>` : ''}
           ${s.ESTADO === 'Cortado' ? `<button class="mini" data-aviso-corte="1">${ic('chat')}Aviso de corte</button>` : ''}
           ${(s.ESTADO === 'Cortado' || s.ESTADO === 'Suspendido') && !pausaDe(s.ID_SERV) ? `<a class="mini verde" href="#/reactivar/${esc(s.ID_SERV)}">Reactivar</a>` : ''}</div>
         </div>`).join('') || '<p class="vacio">Sin servicios</p>'}
@@ -262,7 +265,7 @@ async function vCliente(id) {
   vista().querySelectorAll('[data-orden-corte]').forEach((b) => { b.onclick = async () => {
     const sv = servicioPorId(b.dataset.ordenCorte);
     // cliente DUO (INTERNET + CATV): el corte es del cliente completo → la orden lleva sus dos servicios
-    const servs = /DUO/i.test(sv.MODO) ? serviciosDe(id).filter((s) => s.ESTADO === 'Activo' && /DUO/i.test(s.MODO)) : [sv];
+    const servs = duo && duo.todos.some((s) => s.ID_SERV === sv.ID_SERV) ? duo.todos.filter((s) => s.ESTADO === 'Activo') : [sv];
     const pend = (await ordenesLocales()).some((o) => o.estado === 'Pendiente' && o.tipo !== 'CAMBIO_PLAN' &&
       o.items.some((it) => servs.some((s) => s.ID_SERV === it.idServ) && it.estado === 'Pendiente'));
     if (pend) return aviso('Este servicio ya tiene un corte pendiente (orden u hoja de ruta).', 'error');
@@ -273,6 +276,18 @@ async function vCliente(id) {
     await encolar(op);
     aviso(navigator.onLine ? 'Orden de corte enviada.' : 'Orden guardada sin señal: ya puede imprimirla.');
     location.hash = '#/orden/' + op.idSolicitud;
+  }; });
+  vista().querySelectorAll('[data-agregar-catv]').forEach((b) => { b.onclick = async () => {
+    const sv = servicioPorId(b.dataset.agregarCatv);
+    const plCatv = D.planes.find((p) => /CATV/i.test(nombreServicio(p.PLAN)) && !/INTERNET/i.test(p.PLAN));
+    const precio = await pedirTexto(`Se crea el servicio CATV desde hoy (el primer mes se prorratea) y el cliente queda como paquete DUO con ${nombreServicio(sv.PLAN)} ${soles(sv.TARIFA)}. Precio del CATV (S/ al mes):`,
+      { titulo: '¿Agregar TV cable?', valor: String(plCatv ? Number(plCatv.TARIFA) : 25), si: 'Agregar' });
+    if (precio === null) return;
+    const t = Number(String(precio).replace(',', '.'));
+    if (!(t > 0)) return aviso('El precio debe ser mayor a 0.', 'error');
+    await encolar({ tipo: 'NUEVO_SERVICIO', idCliente: id, plan: plCatv ? plCatv.PLAN : 'SERVICIO DE CATV', tarifa: t, modo: sv.MODO, fecha: hoyISO() });
+    b.disabled = true;
+    aviso(navigator.onLine ? 'Enviado. El CATV aparecerá en segundos.' : 'Guardado: se enviará al volver la señal.');
   }; });
   vista().querySelectorAll('[data-terminar]').forEach((b) => { b.onclick = async () => {
     const pa = pausaDe(b.dataset.terminar), enCurso = pa.ESTADO === 'Activa';
@@ -794,7 +809,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -887,20 +902,67 @@ function servicioPorId(idServ) { return D.servicios.find((s) => s.ID_SERV === id
 function vCorte(idServ) {
   const s = servicioPorId(idServ);
   if (!s) { vista().innerHTML = '<p class="error">Servicio no encontrado.</p>'; return; }
+  // paquete DUO (INTERNET + CATV): se ofrece actuar sobre los dos; "Baja" de uno solo = quitarlo del paquete
+  const duo = serviciosDuo(s.ID_CLIENTE);
+  const paquete = duo && duo.todos.some((x) => x.ID_SERV === s.ID_SERV) ? duo.todos : null;
   vista().innerHTML = `<section class="form"><h2>Corte / suspensión / baja</h2>
     <p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.PLAN)} · PPPoE ${esc(s.PPPOE || '-')}</p>
     <label>Acción<select id="acc"><option value="CORTAR">Corte (libera el PPPoE, conserva la deuda)</option>
       <option value="SUSPENDER">Suspensión (reserva el PPPoE)</option><option value="BAJA">Baja definitiva</option></select></label>
+    ${paquete ? `<fieldset class="paquete"><legend>Paquete DUO: ¿a qué servicios?</legend>
+      ${paquete.map((x) => `<label class="check"><input type="checkbox" class="srvDuo" value="${esc(x.ID_SERV)}" data-estado="${esc(x.ESTADO)}">
+        ${esc(nombreServicio(x.PLAN))} · ${soles(x.TARIFA)} · ${esc(x.ESTADO)}</label>`).join('')}
+      <p class="sub" id="notaDuo"></p>
+      <div id="quedaWrap" hidden><label><span id="quedaTxt"></span><input id="quedaPrecio" type="number" step="0.10" inputmode="decimal"></label></div>
+    </fieldset>` : ''}
     <label>Motivo<input id="motivo" value="Falta de pago"></label>
     <label class="check"><input type="checkbox" id="cobrarMes" checked> Cobrar el mes del corte</label>
     <button class="btn grande rojo" id="ok">EJECUTAR</button>
     <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
+  const cajas = () => [...vista().querySelectorAll('.srvDuo')];
+  const elegidos = () => (paquete ? cajas().filter((c) => c.checked && !c.disabled).map((c) => servicioPorId(c.value)) : [s]);
+  const queda = () => (paquete ? paquete.filter((x) => x.ESTADO !== 'Baja' && !elegidos().some((e) => e.ID_SERV === x.ID_SERV)) : []);
+  const pintarDuo = (inicial) => {
+    if (!paquete) return;
+    const acc = $('#acc').value;
+    cajas().forEach((c) => {
+      // cortar o suspender solo aplica a servicios activos; la baja, a cualquiera que no esté de baja
+      c.disabled = acc === 'BAJA' ? c.dataset.estado === 'Baja' : c.dataset.estado !== 'Activo';
+      if (inicial || c.disabled) c.checked = !c.disabled && (acc !== 'BAJA' || c.value === s.ID_SERV);
+    });
+    const q = queda(), soloUno = acc === 'BAJA' && q.length === 1 && elegidos().length > 0;
+    $('#notaDuo').textContent = acc === 'BAJA'
+      ? (soloUno ? `Se quita ${elegidos().map((e) => nombreServicio(e.PLAN)).join(' + ')} del paquete. El cliente sigue con ${nombreServicio(q[0].PLAN)}.` : 'Baja de todos los servicios marcados.')
+      : 'Si cualquiera de los dos se atrasa, se corta el cliente completo (los dos marcados).';
+    $('#quedaWrap').hidden = !soloUno;
+    if (soloUno) {
+      $('#quedaTxt').textContent = `Nuevo precio de ${nombreServicio(q[0].PLAN)} desde el mes siguiente (hoy ${soles(q[0].TARIFA)}; déjelo igual si no cambia)`;
+      if (!$('#quedaPrecio').dataset.serv || $('#quedaPrecio').dataset.serv !== q[0].ID_SERV) { $('#quedaPrecio').value = Number(q[0].TARIFA) || ''; $('#quedaPrecio').dataset.serv = q[0].ID_SERV; }
+    }
+  };
+  if (paquete) {
+    $('#acc').onchange = () => { $('#motivo').value = $('#acc').value === 'BAJA' ? 'Solo quiere un servicio' : 'Falta de pago'; pintarDuo(true); };
+    cajas().forEach((c) => { c.onchange = () => pintarDuo(false); });
+    pintarDuo(true);
+  }
   $('#ok').onclick = async () => {
     const motivo = $('#motivo').value.trim();
     if (motivo.length < 3) return aviso('Indique el motivo.', 'error');
-    const accion = $('#acc').value;
-    if (!(await confirmar(s.CLIENTE, { titulo: `¿${$('#acc').selectedOptions[0].text.split(' (')[0]}?`, si: 'Ejecutar', peligro: true }))) return;
-    await encolar({ tipo: accion, idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, motivo, fecha: hoyISO(), cobrarMesCorte: $('#cobrarMes').checked });
+    const accion = $('#acc').value, servs = elegidos();
+    if (!servs.length) return aviso('Marque al menos un servicio.', 'error');
+    const q = queda(), soloUno = paquete && accion === 'BAJA' && q.length === 1;
+    const nuevoPrecio = soloUno ? Number($('#quedaPrecio').value || 0) : 0;
+    if (soloUno && !(nuevoPrecio > 0)) return aviso('Escriba el precio del servicio que se queda.', 'error');
+    const cambiaPrecio = soloUno && r2(nuevoPrecio) !== r2(Number(q[0].TARIFA));
+    const titulo = `¿${$('#acc').selectedOptions[0].text.split(' (')[0]}?`;
+    if (!(await confirmar(`${s.CLIENTE}\n${servs.map((x) => x.ID_SERV + ' ' + nombreServicio(x.PLAN)).join(' + ')}` +
+      (cambiaPrecio ? `\n${nombreServicio(q[0].PLAN)}: ${soles(q[0].TARIFA)} → ${soles(nuevoPrecio)} desde el mes siguiente` : ''), { titulo, si: 'Ejecutar', peligro: true }))) return;
+    for (const x of servs) await encolar({ tipo: accion, idServ: x.ID_SERV, idCliente: x.ID_CLIENTE, motivo, fecha: hoyISO(), cobrarMesCorte: $('#cobrarMes').checked });
+    if (cambiaPrecio) {
+      const d = new Date(hoyISO() + 'T00:00:00'); d.setMonth(d.getMonth() + 1, 1);
+      await encolar({ tipo: 'CAMBIAR_PLAN', idServ: q[0].ID_SERV, idCliente: q[0].ID_CLIENTE, plan: q[0].PLAN, tarifa: nuevoPrecio,
+        fecha: d.toISOString().slice(0, 10) });
+    }
     aviso(navigator.onLine ? 'Enviado. Se aplicará en segundos.' : 'Guardado sin señal: se enviará al volver la conexión.');
     if (accion === 'CORTAR' && (await confirmar('Se abrirá WhatsApp con el aviso de corte.', { titulo: '¿Avisar al cliente?', si: 'Avisar', no: 'No' }))) await enviarWhatsApp(s.ID_CLIENTE, plantilla('MsgCorte', s.ID_CLIENTE));
     location.hash = '#/cliente/' + s.ID_CLIENTE;
@@ -914,6 +976,10 @@ function vReactivar(idServ) {
   const r = D.resumen[s.ID_CLIENTE] || {};
   const propio = s.PPPOE ? [s.PPPOE] : [];
   const planes = D.planes.filter((p) => p.ACTIVO !== 'No' || p.PLAN === s.PLAN);
+  // paquete DUO: el otro servicio cortado/suspendido se reactiva junto (marcado por defecto)
+  const duo = serviciosDuo(s.ID_CLIENTE);
+  const otros = duo && duo.todos.some((x) => x.ID_SERV === s.ID_SERV)
+    ? duo.todos.filter((x) => x.ID_SERV !== s.ID_SERV && (x.ESTADO === 'Cortado' || x.ESTADO === 'Suspendido') && !pausaDe(x.ID_SERV)) : [];
   vista().innerHTML = `<section class="form"><h2>Reactivar servicio</h2>
     <p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.ESTADO)} · PPPoE anterior ${esc(s.PPPOE_ANT || '-')}</p>
     ${Number(r.DEUDA_VENCIDA) > 0 ? `<p class="aviso error">Aún debe ${soles(r.DEUDA_VENCIDA)}. <a href="#/cobrar/${esc(s.ID_CLIENTE)}">Cobrar primero</a> (puede reactivar igual).</p>` : ''}
@@ -925,6 +991,7 @@ function vReactivar(idServ) {
     <label class="check"><input type="checkbox" id="manual"> Modificar el monto del primer mes manualmente</label>
     <div id="manualWrap" hidden><label>Monto del primer mes (S/)<div class="fila"><input id="primer" type="number" step="0.10" inputmode="decimal">
       <button type="button" class="mini" id="redondear">Redondear</button></div></label></div>
+    ${otros.map((x) => `<label class="check"><input type="checkbox" class="otroDuo" value="${esc(x.ID_SERV)}" checked> Reactivar también ${esc(nombreServicio(x.PLAN))} · ${soles(x.TARIFA)} (paquete DUO)</label>`).join('')}
     <label>Motivo<input id="motivo" value="Reactivación por pago"></label>
     <button class="btn grande verde" id="ok">${ic('check')}Reactivar</button>
     <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
@@ -960,6 +1027,11 @@ function vReactivar(idServ) {
     await encolar({ tipo: 'REACTIVAR', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, codigoPPPoE: $('#ppp').value, plan: $('#plan').value,
       tarifa: tarifa(), motivo: $('#motivo').value.trim() || 'Reactivación', fecha: fe,
       datos: manual ? { prorratear: true, montoPrimerMes: r2(primer) } : { prorratear: true } });
+    for (const c of vista().querySelectorAll('.otroDuo:checked')) {
+      const x = servicioPorId(c.value);           // el CATV vuelve con su propio plan y precio, sin PPPoE
+      await encolar({ tipo: 'REACTIVAR', idServ: x.ID_SERV, idCliente: x.ID_CLIENTE, codigoPPPoE: '', plan: x.PLAN, tarifa: Number(x.TARIFA),
+        motivo: $('#motivo').value.trim() || 'Reactivación', fecha: fe, datos: { prorratear: true } });
+    }
     aviso(navigator.onLine ? 'Enviado. Se aplicará en segundos.' : 'Guardado sin señal: se enviará al volver la conexión.');
     location.hash = '#/cliente/' + s.ID_CLIENTE;
   };
@@ -1055,13 +1127,26 @@ function vFormCliente(id) {
       <label>Plan *<select id="s_plan"><option value="">— elegir —</option>${planes.map((p) => `<option data-t="${Number(p.TARIFA)}">${esc(p.PLAN)}</option>`).join('')}</select></label>
       <label>Tarifa mensual (S/)<input id="s_tarifa" type="number" step="0.10" inputmode="decimal"></label>
       <label>Modo / equipo<select id="s_modo"><option value=""></option>${lst('MODO').map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+      <label class="check"><input type="checkbox" id="s_catv"> Incluye TV cable (paquete DUO: INTERNET + CATV)</label>
+      <div id="s_catvWrap" hidden><label>Precio del CATV (S/ al mes)<input id="s_catvT" type="number" step="0.10" inputmode="decimal" value="${Number((D.planes.find((p) => /CATV/i.test(nombreServicio(p.PLAN)) && !/INTERNET/i.test(p.PLAN)) || {}).TARIFA) || 25}"></label>
+        <p class="sub" id="s_catvTot"></p></div>
       <label>PPPoE<select id="s_pppoe"><option value="">(sin PPPoE)</option>${pppoeDisponibles().map((p) => optPPPoE(p)).join('')}</select></label>
       <label>Fecha de inicio<input id="s_inicio" type="date" value="${hoyISO()}"></label>
       <label>Instalación (S/)<input id="s_inst" type="number" step="0.10" inputmode="decimal" value="0"></label>
       <p class="sub">El primer mes se prorratea según el día de instalación; las cuotas se generan hasta diciembre.</p>`}
     <button class="btn grande verde" id="ok">${editar ? 'GUARDAR CAMBIOS' : 'REGISTRAR CLIENTE'}</button>
     <a class="btn secundario" href="${editar ? '#/cliente/' + esc(id) : '#/mas'}">Cancelar</a></section>`;
-  if (!editar) $('#s_plan').onchange = (e) => { const o = e.target.selectedOptions[0]; $('#s_tarifa').value = o && o.dataset.t ? o.dataset.t : ''; };
+  if (!editar) {
+    // paquete DUO: el plan elegido es el INTERNET; el CATV se crea como segundo servicio (se cobra y corta como uno)
+    const totCatv = () => {
+      $('#s_catvWrap').hidden = !$('#s_catv').checked;
+      const ti = Number($('#s_tarifa').value || 0), tc = Number($('#s_catvT').value || 0);
+      $('#s_catvTot').textContent = `INTERNET ${soles(ti)} + CATV ${soles(tc)} = ${soles(ti + tc)} al mes. El PPPoE va en el INTERNET.`;
+    };
+    $('#s_plan').onchange = (e) => { const o = e.target.selectedOptions[0]; $('#s_tarifa').value = o && o.dataset.t ? o.dataset.t : ''; totCatv(); };
+    $('#s_modo').onchange = () => { if (/DUO/i.test($('#s_modo').value)) $('#s_catv').checked = true; totCatv(); };
+    ['#s_catv', '#s_tarifa', '#s_catvT'].forEach((x) => { $(x).addEventListener('input', totCatv); $(x).addEventListener('change', totCatv); });
+  }
   $('#btnDni').onclick = async () => {
     const dni = $('#f_DNI_RUC').value.trim();
     if (!/^\d{8}$|^\d{11}$/.test(dni)) return aviso('Escriba primero el DNI (8 dígitos) o RUC (11).', 'error');
@@ -1117,10 +1202,15 @@ function vFormCliente(id) {
     const plan = $('#s_plan').value, tarifa = Number($('#s_tarifa').value || 0);
     if (!plan) return aviso('Elija el plan del servicio.', 'error');
     if (!(tarifa > 0)) return aviso('La tarifa debe ser mayor a 0.', 'error');
-    if (!(await confirmar(`${d.NOMBRES}\n${plan} · ${soles(tarifa)}/mes`, { titulo: '¿Registrar cliente?', si: 'Registrar' }))) return;
+    const conCatv = $('#s_catv').checked, tarCatv = Number($('#s_catvT').value || 0);
+    if (conCatv && !(tarCatv > 0)) return aviso('El precio del CATV debe ser mayor a 0.', 'error');
+    if (conCatv && !/INTERNET/i.test(plan)) return aviso('Con TV cable, el plan elegido debe ser el de INTERNET.', 'error');
+    if (!(await confirmar(`${d.NOMBRES}\n${plan} · ${soles(tarifa)}/mes` + (conCatv ? `\n+ SERVICIO DE CATV · ${soles(tarCatv)}/mes = ${soles(tarifa + tarCatv)}` : ''),
+      { titulo: '¿Registrar cliente?', si: 'Registrar' }))) return;
     d.FECHA_ALTA = $('#s_inicio').value || hoyISO();
     await encolar({ tipo: 'ALTA_CLIENTE', datos: { cliente: d, servicio: { plan, tarifa, modo: $('#s_modo').value,
-      pppoe: $('#s_pppoe').value, fechaInicio: d.FECHA_ALTA, montoInstalacion: Number($('#s_inst').value || 0) } } });
+      pppoe: $('#s_pppoe').value, fechaInicio: d.FECHA_ALTA, montoInstalacion: Number($('#s_inst').value || 0),
+      catv: conCatv ? { tarifa: tarCatv } : undefined } } });
     aviso(navigator.onLine ? 'Cliente enviado. Aparecerá en la búsqueda en unos segundos.' : 'Guardado sin señal: se registrará al volver la conexión.');
     location.hash = '#/cola';
   };
@@ -1215,6 +1305,8 @@ function vCambiarPlan(idServ) {
   vista().innerHTML = `<section class="form"><h2>Cambiar plan</h2>
     <p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)}</p>
     <dl><dt>Plan actual</dt><dd>${esc(s.PLAN)}</dd><dt>Tarifa actual</dt><dd>${soles(actual)}/mes</dd></dl>
+    ${(() => { const duo = serviciosDuo(s.ID_CLIENTE); const otro = duo && duo.todos.some((x) => x.ID_SERV === s.ID_SERV) ? duo.todos.filter((x) => x.ID_SERV !== s.ID_SERV) : [];
+      return otro.length ? `<p class="aviso">${ic('alerta')}<span>Este servicio es parte del <b>paquete DUO</b>. El cambio solo afecta a ${esc(nombreServicio(s.PLAN))}; ${otro.map((x) => esc(nombreServicio(x.PLAN)) + ' sigue en ' + soles(x.TARIFA)).join(', ')}. Para dejar solo un servicio use <b>Cortar → Baja</b> en el que se quita.</span></p>` : ''; })()}
     <label>Plan nuevo *<select id="pl"><option value="">— elegir —</option>${planes.map((p) => `<option data-t="${Number(p.TARIFA)}">${esc(p.PLAN)}</option>`).join('')}</select></label>
     <label>Tarifa nueva (S/ al mes)<input id="tar" type="number" step="0.10" inputmode="decimal"></label>
     <label>Fecha del cambio<input id="fec" type="date" value="${hoyISO()}"></label>

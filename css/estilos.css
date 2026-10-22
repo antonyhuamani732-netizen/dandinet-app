@@ -271,6 +271,10 @@ div.aviso { display: block; }
 label { display: block; margin: var(--e-4) 0 0; font-size: var(--t-sm); font-weight: var(--w-medio); color: var(--c-tinta-2); }
 label.check { display: flex; gap: var(--e-3); align-items: center; color: var(--c-tinta); font-weight: var(--w-normal); min-height: var(--toque-min); }
 label.check input { width: 20px; height: 20px; margin: 0; flex-shrink: 0; accent-color: var(--c-primario); }
+/* paquete DUO en corte / baja: recuadro con los servicios del cliente */
+fieldset.paquete { margin: var(--e-4) 0 0; padding: var(--e-2) var(--e-4) var(--e-3); border: 1px solid var(--c-linea); border-radius: var(--r-md); min-width: 0; }
+fieldset.paquete legend { padding: 0 var(--e-2); font-size: var(--t-sm); font-weight: var(--w-medio); color: var(--c-tinta-2); }
+fieldset.paquete .sub { margin: var(--e-2) 0 0; }
 input:not([type=checkbox]):not([type=radio]), select, textarea {
   display: block; width: 100%; min-height: 48px; margin-top: var(--e-1); padding: var(--e-3) var(--e-4); font: inherit; font-size: var(--t-md);
   border-radius: var(--r-md); border: 1px solid var(--c-borde-campo); background: var(--c-superficie); color: var(--c-tinta);
