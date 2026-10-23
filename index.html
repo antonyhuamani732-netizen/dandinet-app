@@ -2,6 +2,11 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
+  <!-- Política de seguridad (CSP): el navegador solo ejecuta scripts de la propia app, de Google (inicio de sesión)
+       y de Leaflet (mapa, con huella fija), y solo se conecta con el servidor de la app y Google.
+       Si agrega un servicio externo nuevo, hay que añadir su dirección aquí o el navegador lo bloqueará. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client https://unpkg.com/leaflet@1.9.4/; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style https://unpkg.com/leaflet@1.9.4/; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://unpkg.com/leaflet@1.9.4/; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src 'self'; manifest-src 'self'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0c2447" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#081a33" media="(prefers-color-scheme: dark)">
@@ -12,8 +17,7 @@
   <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
   <link rel="icon" href="icons/icono-192.png" sizes="192x192">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
-  <script>/* tema elegido (Día / Noche) antes de pintar, para que no parpadee */
-    try { var t = localStorage.getItem('tema'); if (t === 'dia' || t === 'noche') document.documentElement.dataset.tema = t; } catch (e) {}</script>
+  <script src="js/tema.js"></script>
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/estilos.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>

@@ -61,7 +61,8 @@ export function sincronizarTodo() {
     avisar({ tipo: 'inicio' });
     try {
       await enviarCola();
-      const s = await llamar('sincronizar');
+      // sinClaves: las claves WiFi/router no se guardan en el celular; se piden al abrir la ficha
+      const s = await llamar('sincronizar', { sinClaves: true });
       const antes = await kvGet('libroId');
       if (s.libro && antes && antes !== s.libro) await limpiarPorCambioDeLibro(s.libro);
       if (s.libro) await kvSet('libroId', s.libro);

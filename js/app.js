@@ -267,15 +267,13 @@ const esCatv = (s) => /CATV|CABLE/i.test(nombreServicio(s.PLAN)) && !/INTERNET/i
 async function vCliente(id) {
   const c = D.porId[id];
   if (!c) { vista().innerHTML = '<p class="error">Cliente no encontrado.</p>'; return; }
-  const r = D.resumen[id] || {}, priv = D.privados[id] || {};
+  const r = D.resumen[id] || {};
   const duo = serviciosDuo(id);          // INTERNET + CATV: se muestran y cobran como uno
   const pagos = D.pagos.filter((p) => p.ID_CLIENTE === id).slice(-8).reverse();
   const enCola = (await colaTodos()).filter((o) => o.idCliente === id && o.estadoLocal !== 'ok' && o.estadoLocal !== 'rechazado');
   const servs = serviciosDe(id), vivos = servs.filter((s) => s.ESTADO !== 'Baja'), bajas = servs.filter((s) => s.ESTADO === 'Baja');
   const ajCli = (D.ajustes || []).filter((a) => a.ID_CLIENTE === id).slice(-6).reverse();
   const obs = String(c.OBSERVACIONES || '').trim();
-  const claves = [priv.USUARIO_WIFI || priv.CLAVE_WIFI ? `WiFi: ${priv.USUARIO_WIFI || '-'} / ${priv.CLAVE_WIFI || '-'}` : '',
-    priv.USUARIO_ROUTER || priv.CLAVE_ROUTER ? `Router: ${priv.USUARIO_ROUTER || '-'} / ${priv.CLAVE_ROUTER || '-'}` : ''].filter(Boolean).join('\n');
   const enDuo = (s) => duo && duo.todos.some((x) => x.ID_SERV === s.ID_SERV);
   const sueltos = vivos.filter((s) => !enDuo(s));
   vista().innerHTML = `
@@ -295,7 +293,7 @@ async function vCliente(id) {
         <button class="btn" id="btnContrato">${ic('documento')}Contrato</button>
         <a class="btn" href="#/editar/${esc(id)}">${ic('editar')}Editar</a>
       </div>
-      <h3 class="tit-ic">Datos ${obs ? ayuda('Observaciones', obs, 'chat') : ''}${claves ? ayuda('Claves WiFi / router', claves, 'llave') : ''}</h3>
+      <h3 class="tit-ic">Datos ${obs ? ayuda('Observaciones', obs, 'chat') : ''}<button type="button" class="info" id="btnClaves" aria-label="Ver claves WiFi / router">${ic('llave')}</button></h3>
       <dl class="datos">
         <dt>${ic('telefono')}<span class="sr">Teléfono</span></dt><dd>${esc(c.TELEFONO) || '—'}${c.TELEFONO2 ? ' / ' + esc(c.TELEFONO2) : ''}</dd>
         <dt>${ic('ubicacion')}<span class="sr">Dirección</span></dt><dd>${esc(c.DIRECCION) || '—'}${c.REFERENCIA ? ` <small>(${esc(c.REFERENCIA)})</small>` : ''}
@@ -322,6 +320,20 @@ async function vCliente(id) {
     </section>`;
   prepararSecciones(vista());
   $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, plantilla('MsgCobranza', id));
+  // claves WiFi/router: se piden al servidor en el momento (no se guardan en el celular; queda registro de quién las vio)
+  $('#btnClaves').onclick = async () => {
+    const b = $('#btnClaves');
+    if (!navigator.onLine) return aviso('Sin señal: las claves solo se consultan con internet.', 'error');
+    b.disabled = true;
+    try {
+      const k = await llamar('clavesCliente', { idCliente: id });
+      const txt = [k.USUARIO_WIFI || k.CLAVE_WIFI ? `WiFi: ${k.USUARIO_WIFI || '-'} / ${k.CLAVE_WIFI || '-'}` : '',
+        k.USUARIO_ROUTER || k.CLAVE_ROUTER ? `Router: ${k.USUARIO_ROUTER || '-'} / ${k.CLAVE_ROUTER || '-'}` : ''].filter(Boolean).join('\n');
+      verAyuda('Claves WiFi / router', txt || 'Este cliente no tiene claves registradas.');
+    } catch (e) {
+      aviso(e.message, 'error');
+    } finally { b.disabled = false; }
+  };
   $('#btnContrato').onclick = () => verContrato(id, r);
   vista().querySelectorAll('[data-revertir]').forEach((b) => { b.onclick = () => revertirConvenio(b.dataset.revertir); });
   vista().querySelectorAll('[data-menu]').forEach((b) => { b.onclick = () => menuServicio(b.dataset.menu); });
@@ -901,10 +913,13 @@ function cargarLeaflet() {
   if (_leaflet) return _leaflet;
   _leaflet = new Promise((ok, mal) => {
     const css = document.createElement('link');
+    // integrity: huella oficial de Leaflet 1.9.4; si el archivo del CDN cambiara, el navegador no lo ejecuta
     css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    css.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; css.crossOrigin = '';
     document.head.appendChild(css);
     const js = document.createElement('script');
     js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; js.crossOrigin = '';
     js.onload = () => ok(window.L);
     js.onerror = () => { _leaflet = null; mal(new Error('No se pudo cargar el mapa (¿sin señal?)')); };
     document.head.appendChild(js);
@@ -1340,8 +1355,12 @@ function vFormCliente(id) {
   const editar = RUTA === 'editar';
   const c = editar ? D.porId[id] : {};
   if (editar && !c) { vista().innerHTML = '<p class="error">Cliente no encontrado.</p>'; return; }
-  const pv = editar ? (D.privados[id] || {}) : {};
-  const campo = (k, etq, extra = '') => `<label>${etq}<input id="f_${k}" value="${esc(c[k] !== undefined ? c[k] : (pv[k] || ''))}" ${extra}></label>`;
+  const campo = (k, etq, extra = '') => `<label>${etq}<input id="f_${k}" value="${esc(c[k] !== undefined ? c[k] : '')}" ${extra}></label>`;
+  // claves WiFi/router: al editar se piden al servidor; mientras no lleguen, el campo está bloqueado
+  // y NO se envía (así un cambio hecho sin señal nunca borra las claves guardadas)
+  const CLAVES = ['USUARIO_WIFI', 'CLAVE_WIFI', 'USUARIO_ROUTER', 'CLAVE_ROUTER'];
+  let clavesOk = !editar;
+  const bloq = editar ? 'disabled placeholder="Cargando…"' : '';
   const planes = D.planes.filter((p) => p.ACTIVO !== 'No');
   vista().innerHTML = `<section class="form"><h2>${editar ? 'Editar cliente' : 'Nuevo cliente'}</h2>
     ${editar ? `<p class="sub">${esc(id)}</p>` : '<p class="sub">Los campos con * son obligatorios. El ID se asigna al sincronizar.</p>'}
@@ -1356,8 +1375,9 @@ function vFormCliente(id) {
     ${campo('DIA_VENC', 'Día de vencimiento (1–28)', `inputmode="numeric" placeholder="${esc(D.config.DiaVenc || 4)}"`)}
     ${campo('OBSERVACIONES', 'Observaciones')}
     <h3>WiFi y router</h3>
-    ${campo('USUARIO_WIFI', 'Usuario / red WiFi')}${campo('CLAVE_WIFI', 'Clave WiFi')}
-    ${campo('USUARIO_ROUTER', 'Usuario router')}${campo('CLAVE_ROUTER', 'Clave router')}
+    ${campo('USUARIO_WIFI', 'Usuario / red WiFi', bloq)}${campo('CLAVE_WIFI', 'Clave WiFi', bloq)}
+    ${campo('USUARIO_ROUTER', 'Usuario router', bloq)}${campo('CLAVE_ROUTER', 'Clave router', bloq)}
+    ${editar ? '<p class="sub" id="clavesNota"></p>' : ''}
     ${editar ? '' : `<h3>Servicio</h3>
       <label>Plan *<select id="s_plan"><option value="">— elegir —</option>${planes.map((p) => `<option data-t="${Number(p.TARIFA)}">${esc(p.PLAN)}</option>`).join('')}</select></label>
       <label>Tarifa mensual (S/)<input id="s_tarifa" type="number" step="0.10" inputmode="decimal"></label>
@@ -1372,6 +1392,21 @@ function vFormCliente(id) {
       <p class="sub">El primer mes se prorratea según el día de instalación; las cuotas se generan hasta diciembre.</p>`}
     <button class="btn grande verde" id="ok">${editar ? 'GUARDAR CAMBIOS' : 'REGISTRAR CLIENTE'}</button>
     <a class="btn secundario" href="${editar ? '#/cliente/' + esc(id) : '#/mas'}">Cancelar</a></section>`;
+  if (editar) {
+    (async () => {
+      const nota = $('#clavesNota');
+      try {
+        const k = await llamar('clavesCliente', { idCliente: id });
+        if (!$('#f_CLAVE_WIFI')) return;              // el usuario ya salió del formulario
+        CLAVES.forEach((x) => { const el = $('#f_' + x); el.value = k[x] || ''; el.disabled = false; el.placeholder = ''; });
+        clavesOk = true;
+      } catch (e) {
+        if (!$('#f_CLAVE_WIFI')) return;
+        CLAVES.forEach((x) => { $('#f_' + x).placeholder = '—'; });
+        if (nota) nota.textContent = 'Las claves solo se editan con internet. Los demás datos sí se pueden guardar ahora; las claves no se tocarán.';
+      }
+    })();
+  }
   if (!editar) {
     // paquete DUO: el plan elegido es el INTERNET; el CATV se crea como segundo servicio (se cobra y corta como uno)
     const totCatv = () => {
@@ -1421,8 +1456,8 @@ function vFormCliente(id) {
   $('#ok').onclick = async () => {
     const v = (k) => $('#f_' + k).value.trim();
     const d = {};
-    ['DNI_RUC', 'NOMBRES', 'TELEFONO', 'TELEFONO2', 'DIRECCION', 'REFERENCIA', 'ZONA', 'COORDENADAS', 'DIA_VENC', 'OBSERVACIONES',
-      'USUARIO_WIFI', 'CLAVE_WIFI', 'USUARIO_ROUTER', 'CLAVE_ROUTER'].forEach((k) => { d[k] = v(k); });
+    ['DNI_RUC', 'NOMBRES', 'TELEFONO', 'TELEFONO2', 'DIRECCION', 'REFERENCIA', 'ZONA', 'COORDENADAS', 'DIA_VENC', 'OBSERVACIONES']
+      .concat(clavesOk ? CLAVES : []).forEach((k) => { d[k] = v(k); });
     // validaciones (el servidor las vuelve a hacer)
     if (!docOk(d.DNI_RUC)) return aviso('DNI de 8 dígitos o RUC de 11 (empieza con 10, 15, 17 o 20).', 'error');
     if (!d.NOMBRES) return aviso('Escriba el nombre.', 'error');
@@ -2790,7 +2825,7 @@ function barras(items, campo, formato, clase = '') {
   const max = Math.max(1, ...items.map((x) => Number(x[campo]) || 0));
   return `<div class="barras">${items.map((x) => `<div class="barra-fila"><span class="et">${esc(x.etiqueta)}</span>
     <span class="barra"><i class="${clase}" style="width:${Math.round((Number(x[campo]) || 0) / max * 100)}%"></i></span>
-    <span class="val">${formato(x[campo])}</span></div>`).join('')}</div>`;
+    <span class="val">${esc(formato(x[campo]))}</span></div>`).join('')}</div>`;
 }
 
 function pintarDashboard(d, desdeCache) {
@@ -2819,7 +2854,7 @@ function pintarDashboard(d, desdeCache) {
     <h3>Recaudado por mes · ${d.filtros.anio}</h3>
     ${barras(d.porMes.map((x) => ({ etiqueta: x.mes, v: x.recaudado })), 'v', (v) => soles(v).replace('.00', ''))}
     <table class="resumen"><thead><tr><th>Mes</th><th>Recaudado</th><th>Esperado</th><th>% cobrado</th></tr></thead><tbody>
-      ${d.porMes.filter((x) => x.esperado || x.recaudado).map((x) => `<tr><td>${x.mes}</td><td>${soles(x.recaudado)}</td><td>${soles(x.esperado)}</td><td>${pct(x.pctCobrado)}</td></tr>`).join('')}
+      ${d.porMes.filter((x) => x.esperado || x.recaudado).map((x) => `<tr><td>${esc(x.mes)}</td><td>${soles(x.recaudado)}</td><td>${soles(x.esperado)}</td><td>${pct(x.pctCobrado)}</td></tr>`).join('')}
     </tbody></table>
     <h3>Por método de pago</h3>
     <table class="resumen"><thead><tr><th>Método</th><th>${esc(MESES_TXT[d.filtros.mes - 1])}</th><th>Año</th></tr></thead><tbody>
