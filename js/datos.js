@@ -87,7 +87,9 @@ export const ahoraISO = () => {
 };
 export const metodosPago = () => {
   const l = D.listas.filter((x) => x.TIPO === 'METODO' && x.ACTIVO !== 'No' && x.VALOR !== 'MIGRADO').map((x) => x.VALOR);
-  return l.length ? l : ['Efectivo', 'Yape', 'Plin', 'Transferencia', 'Depósito'];
+  // Plin ya no se usa: se oculta aunque siga en la lista guardada (los recibos antiguos no cambian)
+  const sinPlin = l.filter((m) => !/plin/i.test(m));
+  return sinPlin.length ? sinPlin : ['Efectivo', 'Yape', 'Transferencia', 'Depósito'];
 };
 
 // ---- clientes ------------------------------------------------------------------------
