@@ -27,7 +27,8 @@ export function aplicar(s) {
   D.pppoe = aObjetos(s.pppoe);
   D.histPPPoE = aObjetos(s.histPPPoE);
   D.suspensiones = aObjetos(s.suspensiones);
-  D.ajustes = aObjetos(s.ajustes);                 // ajustes de cuenta de los últimos 13 meses (desde la v1.18)
+  D.ajustes = aObjetos(s.ajustes);
+  D.convenios = aObjetos(s.convenios);             // convenios de pago y castigos (desde la v1.19)                 // ajustes de cuenta de los últimos 13 meses (desde la v1.18)
   // órdenes de trabajo / hojas de ruta (desde la v1.11); DATOS y SNAPSHOT vienen como texto JSON
   const json = (t) => { try { return JSON.parse(t || '{}'); } catch (e) { return {}; } };
   D.ordenes = aObjetos(s.ordenes).map((o) => Object.assign(o, { DATOS: json(o.DATOS) }));
@@ -90,12 +91,13 @@ export const metodosPago = () => {
 };
 
 // ---- clientes ------------------------------------------------------------------------
-export function buscarClientes(texto, max = 80) {
+export function buscarClientes(texto, max = 80, filtro = null) {
   const palabras = String(texto || '').toUpperCase().trim().split(/\s+/).filter(Boolean);
   const out = [];
   for (const c of D.clientes) {
     const r = D.resumen[c.ID_CLIENTE] || {};
-    const s = `${c.ID_CLIENTE} ${c.NOMBRES} ${c.DNI_RUC} ${r.PPPOE || ''} ${c.TELEFONO} ${c.ZONA}`.toUpperCase();
+    if (filtro && !filtro(c)) continue;
+    const s = `${c.ID_CLIENTE} ${c.NOMBRES} ${c.DNI_RUC} ${r.PPPOE || ''} ${c.TELEFONO} ${c.TELEFONO2 || ''} ${c.ZONA}`.toUpperCase();
     if (palabras.every((p) => s.includes(p))) out.push(c);
     if (out.length >= max) break;
   }
@@ -125,7 +127,8 @@ export function serviciosDuo(idCliente) {
   return inet.length && catv.length ? { internet: inet, catv, todos: inet.concat(catv) } : null;
 }
 /** Texto de un cargo: "SERVICIO DE INTERNET", "SERVICIO DE CATV", "INSTALACION", "AJUSTE PLAN". */
-export const nombreCargo = (k) => (k.CONCEPTO === 'MENSUALIDAD' ? nombreServicio(k.PLAN) : String(k.CONCEPTO || ''));
+export const nombreCargo = (k) => (k.CONCEPTO === 'MENSUALIDAD' ? nombreServicio(k.PLAN)
+  : /^CONVENIO CNV-/.test(k.CONCEPTO) ? 'CUOTA DE CONVENIO' : /^ENTRADA CNV-/.test(k.CONCEPTO) ? 'ENTRADA DE CONVENIO' : String(k.CONCEPTO || ''));
 /** Versión corta para filas estrechas: "INTERNET", "CATV". */
 export const nombreCorto = (k) => nombreCargo(k).replace(/^SERVICIO\s+(DE\s+)?/i, '');
 /** Dentro de un mismo mes: INTERNET primero, luego CATV, luego lo demás. */

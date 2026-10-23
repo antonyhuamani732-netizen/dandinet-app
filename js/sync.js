@@ -43,12 +43,12 @@ export async function pendientesDeEnvio() {
 /** Borra lo ya enviado (historial) y las copias guardadas (PDF, dashboard, reportes). Lo PENDIENTE no se toca. */
 async function limpiarHistorialLocal() {
   for (const o of await colaTodos()) if (o.estadoLocal === 'ok' || o.estadoLocal === 'rechazado') await colaBorrar(o.idSolicitud);
-  for (const k of await kvClaves()) if (/^(pdf|dash_|mov_)/.test(String(k))) await kvDel(k);
+  for (const k of await kvClaves()) if (/^(pdf|dash_|mov_|cuenta_)/.test(String(k))) await kvDel(k);
 }
 
 async function limpiarPorCambioDeLibro(nuevo) {
   await colaVaciar();
-  for (const k of await kvClaves()) if (/^(pdf|dash_|mov_)/.test(String(k))) await kvDel(k);
+  for (const k of await kvClaves()) if (/^(pdf|dash_|mov_|cuenta_)/.test(String(k))) await kvDel(k);
   await kvSet('libroId', nuevo);
   avisar({ tipo: 'libro' });
 }
