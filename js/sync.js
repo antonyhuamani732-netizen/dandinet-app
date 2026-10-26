@@ -4,10 +4,12 @@
 // la conexión. Cada operación tiene un idSolicitud único: reenviarla nunca la duplica.
 import { CONFIG } from './config.js';
 import { llamar } from './api.js';
+import { sesionVigente, guardarSesion } from './auth.js';
 import { kvGet, kvSet, kvDel, kvClaves, colaPut, colaTodos, colaVaciar, colaBorrar } from './db.js';
-import { aplicar, ahoraISO } from './datos.js';
+import { aplicar, aplicarPendientes, ahoraISO } from './datos.js';
 
 let _enCurso = null;
+let _parcial = null;
 let _ultimoInicio = 0;
 const oyentes = new Set();
 export const alCambiar = (fn) => oyentes.add(fn);
@@ -20,10 +22,14 @@ export async function encolar(op) {
   op.estadoLocal = 'pendiente';           // pendiente | enviado | ok | rechazado | error
   op.offline = !navigator.onLine;
   await colaPut(op);
+  aplicarPendientes([op]);                // el técnico ve su cambio al instante, con o sin señal
   avisar({ tipo: 'cola' });
-  if (navigator.onLine) sincronizarTodo().catch(() => {});
+  if (navigator.onLine) setTimeout(() => sincronizarTodo().catch(() => {}), 0);   // se envía en segundo plano
   return op;
 }
+
+/** Vuelve a poner sobre los datos descargados lo que este celular aún no envió. */
+export async function reaplicarPendientes() { aplicarPendientes(await pendientesDeEnvio()); }
 
 /** Número provisional para el comprobante hecho sin señal: PEND-<iniciales>-<n> */
 export async function siguienteProvisional(iniciales) {
@@ -55,7 +61,8 @@ async function limpiarPorCambioDeLibro(nuevo) {
 
 /** Envía la cola y luego descarga datos frescos. Evita ejecuciones simultáneas. */
 export function sincronizarTodo() {
-  if (_enCurso) return _enCurso;
+  // una sincronización que lleva más de 3 minutos se da por perdida (antes trababa todo hasta cerrar la app)
+  if (_enCurso && Date.now() - _ultimoInicio < 180000) return _enCurso;
   _ultimoInicio = Date.now();
   _enCurso = (async () => {
     avisar({ tipo: 'inicio' });
@@ -71,15 +78,54 @@ export function sincronizarTodo() {
       await kvSet('datos', s);
       await kvSet('ultimaSync', ahoraISO());
       aplicar(s);
+      await reaplicarPendientes();
       avisar({ tipo: 'fin', ok: true });
+      asegurarSesion();                     // sesión de la app de 30 días (sin esperar)
     } catch (e) {
       avisar({ tipo: 'fin', ok: false, error: e });
       throw e;
     } finally {
-      _enCurso = null;
+      if (_enCurso === yo) _enCurso = null;
     }
   })();
+  const yo = _enCurso;
   return _enCurso;
+}
+
+/**
+ * Sesión de la app (30 días): se pide una vez con el token de Google y se renueva cuando le
+ * quedan menos de 20 días. Un servidor anterior a la 1.25.0 no la conoce: se ignora el error.
+ */
+async function asegurarSesion() {
+  try {
+    const s = await sesionVigente();
+    if (s && Number(s.vence) - Date.now() > 20 * 86400000) return;
+    await guardarSesion(await llamar('sesion'));
+  } catch (e) { /* se reintenta en la próxima sincronización */ }
+}
+
+/**
+ * Descarga liviana (PPPoE, servicios y resumen) para ver al momento lo que hizo otro técnico,
+ * sin bajar todo. Si hay una sincronización completa en curso, espera esa.
+ */
+export function sincronizarParcial() {
+  if (_enCurso) return _enCurso;
+  if (_parcial) return _parcial;
+  _parcial = (async () => {
+    try {
+      await enviarCola();
+      const p = await llamar('sincronizarParcial');
+      const s = await kvGet('datos');
+      if (!s || !p || !p.parcial || (s.libro && p.libro && s.libro !== p.libro)) return false;
+      ['pppoe', 'histPPPoE', 'servicios', 'resumen'].forEach((k) => { if (p[k]) s[k] = p[k]; });
+      await kvSet('datos', s);
+      aplicar(s);
+      await reaplicarPendientes();
+      avisar({ tipo: 'parcial' });
+      return true;
+    } catch (e) { return false; } finally { _parcial = null; }
+  })();
+  return _parcial;
 }
 
 async function enviarCola() {
@@ -110,6 +156,7 @@ async function enviarCola() {
       o.resultado = res;
       o.estadoLocal = res.estado === 'PROCESADO' ? 'ok' : res.estado === 'RECHAZADO' ? 'rechazado' : 'enviado';
       await colaPut(o);
+      if (o.estadoLocal === 'rechazado') avisar({ tipo: 'rechazo', op: o, mensaje: res.mensaje || '' });
     }
     avisar({ tipo: 'cola' });
   }

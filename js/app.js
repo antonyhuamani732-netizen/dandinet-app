@@ -3,11 +3,11 @@ import { CONFIG } from './config.js';
 import { kvGet, kvSet, colaTodos, borrarTodo } from './db.js';
 import { iniciarGoogle, dibujarBoton, leerToken, cerrarSesionGoogle, googleDisponible } from './auth.js';
 import { llamar } from './api.js';
-import { encolar, sincronizarTodo, iniciarAutoSync, alCambiar, pendientesDeEnvio, siguienteProvisional } from './sync.js';
+import { encolar, sincronizarTodo, sincronizarParcial, reaplicarPendientes, iniciarAutoSync, alCambiar, pendientesDeEnvio, siguienteProvisional } from './sync.js';
 import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
   cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
-  nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas, serviciosDuo,
+  nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas, serviciosDuo, detalleInstalacion,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -16,6 +16,9 @@ const vista = () => $('#vista');
 let PERFIL = null;
 let sincronizando = false;
 let RUTA = 'inicio';
+let REPINTAR = null;          // la vista actual sabe repintar solo sus datos (sin perder filtros ni posición)
+let SESION_VENCIDA = false;
+const AYUDA_SYNC = 'En línea: hay señal; lo que usted hace se envía solo en segundos.\nSin señal: puede seguir trabajando; todo queda guardado en el celular y se envía solo al volver la señal.\nN por enviar: operaciones guardadas que aún no llegan al servidor.\nAct. hace N min: cuándo se recibieron por última vez los cambios de los demás (se actualiza solo cada 3 minutos).\nSesión vencida: toque "Continuar con Google" en el aviso amarillo; no hace falta cerrar sesión.';   // Google no renovó la sesión: se muestra el botón Reconectar
 
 // ============================================================================
 // ARRANQUE
@@ -25,6 +28,7 @@ async function arrancar() {
   registrarServiceWorker();
   PERFIL = await kvGet('perfil');
   const hayDatos = await cargarDatosLocales();
+  if (hayDatos) await reaplicarPendientes();   // lo hecho sin señal se ve al abrir la app
   alCambiar(alEventoSync);
   esperarGoogle();
   if (PERFIL && hayDatos) {
@@ -56,7 +60,10 @@ function esperarGoogle(intentos = 0) {
 }
 
 async function alIniciarSesion(token) {
-  if (PERFIL) return;                       // renovación silenciosa del token
+  if (PERFIL) {                             // renovación del token (silenciosa o con el botón Reconectar)
+    if (SESION_VENCIDA) { SESION_VENCIDA = false; ocultarReconectar(); pintarEstado(); sincronizarTodo().then(() => aviso('Reconectado: datos al día.')).catch(manejarErrorSync); }
+    return;
+  }
   const p = leerToken(token);
   $('#loginEstado').textContent = 'Verificando ' + (p ? p.email : '') + '…';
   try {
@@ -97,15 +104,21 @@ async function pintarEstado() {
   const el = $('#estado');
   const hora = ult ? (ult.slice(0, 10) === hoyISO() ? ult.slice(11, 16) : txtFecha(ult)) : '—';
   el.className = 'estado ' + (navigator.onLine ? 'en-linea' : 'sin-senal');
-  el.innerHTML = `<span class="grupo"><span class="punto"></span>${navigator.onLine ? 'En línea' : 'Sin señal'}</span>` +
+  const min = ult ? Math.floor((Date.now() - new Date(ult).getTime()) / 60000) : null;
+  const hace = min === null ? '—' : min < 1 ? 'recién' : min < 60 ? `hace ${min} min` : hora;
+  if (SESION_VENCIDA) el.className += ' vencida';
+  el.innerHTML = `<span class="grupo"><span class="punto"></span>${SESION_VENCIDA ? 'Sesión vencida' : navigator.onLine ? 'En línea' : 'Sin señal'}</span>` +
     (sincronizando ? `<span class="grupo">${ic('sync', 'girando')}Sincronizando</span>` : '') +
     (pend ? `<span class="pend">${pend} por enviar</span>` : '') +
-    `<span class="tenue">Act. ${esc(hora)}</span>`;
+    `<span class="tenue">Act. ${esc(hace)}</span>` +
+    ayuda('Estado de la conexión', AYUDA_SYNC);
   const ins = $('#insigniaCola');
   if (ins) { ins.hidden = !pend; ins.textContent = pend > 99 ? '99+' : pend; }
 }
 
 function alEventoSync(info) {
+  if (info.tipo === 'rechazo') aviso('No se aplicó: ' + (info.mensaje || 'el servidor rechazó la operación') + ' (vea Cola).', 'error');
+  if (info.tipo === 'parcial') refrescarSiCorresponde();
   if (info.tipo === 'libro') aviso('El sistema pasó al libro definitivo: se borraron los datos de prueba de este celular.');
   if (info.tipo === 'inicio') sincronizando = true;
   if (info.tipo === 'fin') { sincronizando = false; if (info.ok) { refrescarSiCorresponde(); revisarAvisos(); } else manejarErrorSync(info.error); }
@@ -114,14 +127,40 @@ function alEventoSync(info) {
 }
 
 function manejarErrorSync(e) {
-  if (e && e.codigo === 'AUTH') aviso('Su sesión venció. Toque "Sincronizar" para renovarla (o vuelva a iniciar sesión).', 'error');
+  if (e && e.codigo === 'AUTH') { SESION_VENCIDA = true; mostrarReconectar(); pintarEstado(); }
   else if (e && e.codigo !== 'RED') aviso(e.message, 'error');
 }
 
+/**
+ * Tras sincronizar se actualiza la pantalla SIN moverla: se conserva la posición, lo escrito
+ * en los buscadores y el campo activo. Los formularios y las ventanas abiertas no se tocan.
+ */
 function refrescarSiCorresponde() {
   const h = location.hash || '#/';
-  if (!/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|pppoe|config|plan|pausa|orden|negocio|ajustar|convenio\/|nuevoserv|editserv|nuevaorden)/.test(h) && !$('#modal')) enrutar();   // no interrumpir un formulario
+  if ($('#modal')) return;
+  if (REPINTAR) { try { REPINTAR(); } catch (e) { /* la vista se repinta en la próxima visita */ } return; }
+  if (/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|config|plan|pausa|orden|negocio|ajustar|convenio\/|nuevoserv|editserv|nuevaorden|mapa|perfil|recordatorios)/.test(h)) return;   // no interrumpir un formulario
+  const y = window.scrollY, act = document.activeElement, idAct = act && act.id;
+  const valores = [...vista().querySelectorAll('input[id],select[id]')].filter((x) => x.type !== 'checkbox' && x.value).map((x) => [x.id, x.value]);
+  Promise.resolve(enrutar({ conservar: true })).then(() => {
+    valores.forEach(([id, v]) => { const x = document.getElementById(id); if (x && x.value !== v) { x.value = v; x.dispatchEvent(new Event(x.tagName === 'SELECT' ? 'change' : 'input')); } });
+    if (idAct) { const x = document.getElementById(idAct); if (x && x.focus) x.focus({ preventScroll: true }); }
+    window.scrollTo(0, y);
+  });
 }
+
+/** Banner fijo cuando Google no renovó la sesión: un toque y sigue sincronizando (sin cerrar sesión). */
+function mostrarReconectar() {
+  let b = $('#reconectar');
+  if (!b) {
+    b = document.createElement('div'); b.id = 'reconectar'; b.className = 'reconectar'; b.setAttribute('role', 'alert');
+    b.innerHTML = `<div class="rc-txt">${ic('alerta')}<div><b>Sesión vencida</b><small>Sus cambios están guardados en el celular. Toque el botón para seguir enviando y recibiendo datos.</small></div></div><div id="rcBoton"></div>`;
+    $('#estado').after(b);
+  }
+  b.hidden = false;
+  dibujarBoton($('#rcBoton'), 'continue_with');
+}
+function ocultarReconectar() { const b = $('#reconectar'); if (b) b.hidden = true; }
 
 let _avisoT = null;
 function aviso(msg, tipo = 'ok') {
@@ -133,16 +172,16 @@ function aviso(msg, tipo = 'ok') {
 // ============================================================================
 // RUTAS
 // ============================================================================
-function enrutar() {
+function enrutar(op = {}) {
   const [ruta, arg] = (location.hash.replace(/^#\//, '') || 'inicio').split('/');
   RUTA = ruta;
+  REPINTAR = null;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
     hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, ajustar: vAjustar, ecuenta: vEstadoCuenta, convenio: vConvenio, convenios: vConvenios, ordenserv: vOrdenServicio, nuevaorden: vNuevaOrden, nuevoserv: vNuevoServicio, editserv: vEditarServicio, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos, negocio: vNegocio,
-    mas: vMas, perfil: vPerfil, recordatorios: vRecordatorios, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
-  window.scrollTo(0, 0);
-  cerrarModal();
-  Promise.resolve(v(decodeURIComponent(arg || ''))).catch((e) => { vista().innerHTML = `<p class="error">${esc(e.message)}</p>`; });
+    mas: vMas, mapa: vMapaGeneral, guia: vGuia, perfil: vPerfil, recordatorios: vRecordatorios, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
+  if (!op.conservar) { window.scrollTo(0, 0); cerrarModal(); }
+  return Promise.resolve(v(decodeURIComponent(arg || ''))).catch((e) => { vista().innerHTML = `<p class="error">${esc(e.message)}</p>`; });
 }
 
 // ---- INICIO ------------------------------------------------------------------------
@@ -192,12 +231,13 @@ async function vInicio() {
     ${tarjetasAccion([
       { href: '#/nuevo', icono: 'nuevoCliente', t: 'Nuevo cliente', color: 'verde' },
       { href: '#/nuevaorden/libre', icono: 'documento', t: 'Nueva orden', color: 'azul' },
+      { href: '#/mapa', icono: 'mapa', t: 'Mapa general', color: 'cian' },
       { href: '#/dashboard', icono: 'grafico', t: 'Dashboard', color: 'violeta' },
       { href: '#/movimientos', icono: 'reloj', t: 'Movimientos', color: 'cian' },
     ], 'dos')}
     <button class="btn secundario" id="btnSync">${ic('sync')}Sincronizar ahora</button>`;
   $('#btnSync').onclick = sincronizarManual;
-  avisarOrdenesHoy(deHoy);
+  revisarAvisos();
 }
 
 /** Día programado de una orden (fecha del trabajo si la tiene; si no, el día que se creó). */
@@ -550,7 +590,7 @@ function vNuevoServicio(idCli) {
     <label>Precio (S/ al mes) *<input id="ns_tarifa" type="number" step="0.10" inputmode="decimal" value="${sug ? Number(sug.TARIFA) : ''}"></label>
     <label class="tit-ic">Modo / equipo * ${ayuda('Modo / equipo', 'Indica cómo está instalado el servicio (ONU, antena, DUO+CATV…).\nSi el cliente tiene internet y TV, use el mismo modo en los dos.\nLa lista se edita en Más → Configuración.')}
       <select id="ns_modo"><option value=""></option>${opcionesModo(modoBase)}</select></label>
-    <label id="ns_pppWrap">PPPoE<select id="ns_ppp"><option value="">(asignar después)</option>${pppoeDisponibles().map((p) => optPPPoE(p, false)).join('')}</select></label>
+    <div id="ns_pppWrap"><span class="etq">PPPoE del internet</span>${campoPPPoE('ns_ppp', '', { titulo: 'PPPoE del internet' })}</div>
     <label class="check" id="ns_igualWrap" hidden><input type="checkbox" id="ns_igual" checked> Poner este modo también en los otros servicios del cliente</label>
     <label>Inicio del servicio<input id="ns_fecha" type="date" value="${hoyISO()}"></label>
     <p class="aviso" id="ns_nota" hidden></p>
@@ -846,8 +886,11 @@ function vPago(nro) {
     const det = cu ? cu.det.filter((d) => d.N_RECIBO === p.N_RECIBO) : [];
     const tb = vista().querySelector('table.periodos tbody');
     if (!det.length || !tb) return;
-    const items = det.map((d) => { const k = cu.cargos.find((x) => x.ID_CARGO === d.ID_CARGO) || {};
-      return { per: String(k.PERIODO || '').slice(0, 7), periodo: txtPeriodo(k.PERIODO), base: nombreCorto(k), monto: Number(d.MONTO_APLICADO), parcial: Number(d.MONTO_APLICADO) < Number(k.MONTO) - 0.004 }; });
+    const items = det.flatMap((d) => { const k = cu.cargos.find((x) => x.ID_CARGO === d.ID_CARGO) || {};
+      const l = { per: String(k.PERIODO || '').slice(0, 7), periodo: txtPeriodo(k.PERIODO), base: nombreCorto(k), monto: Number(d.MONTO_APLICADO), parcial: Number(d.MONTO_APLICADO) < Number(k.MONTO) - 0.004 };
+      // instalación cobrada completa: un renglón por gasto (mano de obra, materiales…), igual que en el PDF
+      const partes = k.CONCEPTO === 'INSTALACION' && !l.parcial ? detalleInstalacion(k.OBS, k.MONTO) : null;
+      return partes ? partes.map((x) => Object.assign({}, l, { base: 'INSTALACIÓN · ' + x.concepto, monto: x.monto })) : [l]; });
     const rango = (t) => (/INTERNET/i.test(t) ? 0 : /CATV|CABLE/i.test(t) ? 1 : 2);
     items.sort((a, b) => a.per.localeCompare(b.per) || rango(a.base) - rango(b.base));
     vista().querySelector('table.periodos thead').innerHTML = '<tr><th>Mes</th><th>Concepto</th><th>Importe</th></tr>';
@@ -1003,12 +1046,12 @@ async function elegirEnMapa(actual) {
   let punto = m0 ? [Number(m0[1]), Number(m0[2])] : [-11.4325, -74.4825];   // por defecto: Pangoa
   return new Promise((ok) => {
     const fondo = modal(`<h3>Ubicar al cliente</h3><p class="sub">Toque el mapa para poner la marca. Puede acercar con dos dedos.</p>
-      <div id="mapa" class="mapa"></div><p class="sub" id="mapaTxt"></p>
+      <div id="mapaCapas"></div><div id="mapa" class="mapa"></div><p class="sub" id="mapaTxt"></p>
       <div class="botones"><button class="btn" id="mapaYo">${ic('ubicacion')}Mi ubicación</button><button class="btn verde" id="mapaOk">${ic('check')}Usar esta</button></div>
       <button class="btn secundario" id="mapaNo">Cancelar</button>`);
     fondo.querySelector('.modal').classList.add('grande');
     const mapa = L.map('mapa').setView(punto, m0 ? 17 : 14);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
+    ponerCapas(L, mapa, $('#mapaCapas'));
     const marca = L.marker(punto, { draggable: true }).addTo(mapa);
     const mostrar = () => { $('#mapaTxt').textContent = punto[0].toFixed(5) + ', ' + punto[1].toFixed(5); };
     mostrar();
@@ -1021,6 +1064,134 @@ async function elegirEnMapa(actual) {
     $('#mapaNo').onclick = () => { cerrarModal(); ok(null); };
     setTimeout(() => mapa.invalidateSize(), 200);
   });
+}
+
+// ---- CAPAS DEL MAPA: calles, satélite y terreno (en zonas rurales el relieve y la foto guían mejor) ----
+const CAPAS_MAPA = {
+  calles: ['Calles', 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }],
+  satelite: ['Satélite', 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imágenes © Esri' }],
+  terreno: ['Terreno', 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '© OpenTopoMap (CC-BY-SA) · © OpenStreetMap' }],
+};
+const AYUDA_CAPAS = 'Calles: mapa normal con nombres.\nSatélite: foto real desde arriba (casas, chacras, caminos).\nTerreno: muestra cerros, quebradas y ríos con curvas de nivel: útil para llegar en zonas rurales.\nLa capa que elija queda guardada en este celular.';
+/** Botones grandes de capa (en vez del control pequeño de Leaflet) dentro de cont. */
+async function ponerCapas(L, mapa, cont) {
+  let actual = (await kvGet('capaMapa')) || 'calles';
+  if (!CAPAS_MAPA[actual]) actual = 'calles';
+  const capas = Object.fromEntries(Object.entries(CAPAS_MAPA).map(([k, [, url, op]]) => [k, L.tileLayer(url, op)]));
+  const usar = (k) => {
+    Object.values(capas).forEach((c) => mapa.removeLayer(c));
+    capas[k].addTo(mapa);
+    if (mapa.getZoom() > CAPAS_MAPA[k][2].maxZoom) mapa.setZoom(CAPAS_MAPA[k][2].maxZoom);
+    actual = k;
+    cont.querySelectorAll('[data-capa]').forEach((b) => { const si = b.dataset.capa === k; b.classList.toggle('sel', si); b.setAttribute('aria-pressed', si); });
+  };
+  cont.innerHTML = `<div class="capas-mapa" role="group" aria-label="Tipo de mapa">${Object.entries(CAPAS_MAPA).map(([k, [t]]) =>
+    `<button type="button" class="mini" data-capa="${k}">${ic(k === 'calles' ? 'mapa' : k === 'satelite' ? 'camara' : 'grafico')}${t}</button>`).join('')}${ayuda('Tipo de mapa', AYUDA_CAPAS)}</div>`;
+  cont.querySelectorAll('[data-capa]').forEach((b) => { b.onclick = () => { usar(b.dataset.capa); kvSet('capaMapa', b.dataset.capa); }; });
+  usar(actual);
+}
+/** "lat,lng" → [lat, lng] o null. */
+const leerGps = (t) => { const m = String(t || '').match(/(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)/); if (!m) return null;
+  const p = [Number(m[1]), Number(m[2])]; return Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180 && (p[0] || p[1]) ? p : null; };
+const comoLlegar = (p) => `https://www.google.com/maps/dir/?api=1&destination=${p[0]},${p[1]}`;
+
+// ---- MAPA GENERAL: todos los clientes y las órdenes pendientes, por color según importancia ----
+const MAPA_CAT = {
+  orden: { t: 'Órdenes pendientes', color: 'azul', icono: 'lista', forma: 'cuadro' },
+  cortar: { t: 'A cortar', color: 'rojo', icono: 'cortar' },
+  moroso: { t: 'Morosos', color: 'ambar', icono: 'alerta' },
+  activo: { t: 'Al día', color: 'verde', icono: 'check' },
+  pausa: { t: 'Cortados / suspendidos', color: 'gris', icono: 'reloj' },
+};
+const AYUDA_MAPA = 'Cada punto es un cliente o una orden pendiente.\nCuadrado = orden pendiente (el ícono dice el tipo: tijera corte, router servicio, lista orden libre).\nRojo = a cortar · Ámbar = moroso · Verde = al día · Gris = cortado o suspendido.\nToque un punto para ver el detalle, abrir la ficha, llamar o ir con Google Maps ("Cómo llegar").\nUse los botones de colores para mostrar u ocultar cada grupo.\nSolo aparecen los clientes con ubicación guardada: agréguela en Editar cliente → Ubicación.';
+function categoriaCliente(id) {
+  const r = D.resumen[id] || {};
+  if (r.ESTADO === 'Baja' || !r.ESTADO) return null;
+  if (/CORTAR/.test(r.ALERTA || '')) return 'cortar';
+  if (r.ESTADO === 'Moroso') return 'moroso';
+  if (r.ESTADO === 'Cortado' || r.ESTADO === 'Suspendido') return 'pausa';
+  return 'activo';
+}
+async function vMapaGeneral() {
+  const ver = Object.assign({ orden: true, cortar: true, moroso: true, activo: true, pausa: false }, (await kvGet('mapaVer')) || {});
+  let zona = (await kvGet('mapaZona')) || '';
+  // puntos: clientes con ubicación + cada lugar de una orden pendiente
+  const puntos = [];
+  D.clientes.forEach((c) => { const p = leerGps(c.COORDENADAS), cat = p && categoriaCliente(c.ID_CLIENTE); if (cat) puntos.push({ cat, p, zona: c.ZONA || '', cli: c }); });
+  (await ordenesLocales()).filter((o) => o.estado === 'Pendiente').forEach((o) => {
+    if (o.tipo === 'ORDEN_LIBRE') { const p = leerGps(o.datos.gps); if (p) puntos.push({ cat: 'orden', p, zona: o.datos.zona || '', ot: o }); return; }
+    const vistos = new Set();
+    o.items.filter((it) => it.estado === 'Pendiente').forEach((it) => {
+      const c = D.porId[it.idCliente] || {}, p = leerGps((it.snap || {}).gps || c.COORDENADAS);
+      if (p && !vistos.has(it.idCliente)) { vistos.add(it.idCliente); puntos.push({ cat: 'orden', p, zona: (it.snap || {}).zona || c.ZONA || '', ot: o, cli: c, snap: it.snap || {} }); }
+    });
+  });
+  const zonas = [...new Set(puntos.map((x) => x.zona).filter(Boolean))].sort();
+  const sinUbic = D.clientes.filter((c) => categoriaCliente(c.ID_CLIENTE) && !leerGps(c.COORDENADAS)).length;
+  vista().innerHTML = `<h2 class="tit-ic">${ic('mapa')}Mapa general ${ayuda('Mapa general', AYUDA_MAPA)}</h2>
+    <div class="chips-mapa" id="mgF" role="group" aria-label="Qué mostrar"></div>
+    <label class="fila-zona">Zona<select id="mgZona"><option value="">Todas las zonas</option>${zonas.map((z) => `<option ${z === zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
+    <div id="mgCapas"></div>
+    <div class="mapa-caja"><div id="mapaG" class="mapa mapa-general" aria-label="Mapa de clientes y órdenes"></div>
+      <button type="button" class="btn-mapa" id="mgYo" aria-label="Mi ubicación">${ic('ubicacion')}</button></div>
+    <p class="sub" id="mgTxt"></p>
+    ${sinUbic ? `<p class="globo">${ic('info')}<span>${sinUbic} cliente(s) aún no tienen ubicación guardada y no aparecen en el mapa.</span></p>` : ''}`;
+  const pintarChips = (cuenta) => {
+    $('#mgF').innerHTML = Object.entries(MAPA_CAT).map(([k, c]) => `<button type="button" class="chip-mapa c-${c.color} ${ver[k] ? 'sel' : ''}" data-cat="${k}" aria-pressed="${ver[k]}">
+      <span class="mk mk-${c.color} ${c.forma || ''}">${ic(c.icono)}</span>${esc(c.t)} <b>${cuenta[k] || 0}</b></button>`).join('');
+    $('#mgF').querySelectorAll('[data-cat]').forEach((b) => { b.onclick = () => { ver[b.dataset.cat] = !ver[b.dataset.cat]; kvSet('mapaVer', ver); pintar(); }; });
+  };
+  if (!navigator.onLine) {
+    const cuenta = {}; puntos.forEach((x) => { cuenta[x.cat] = (cuenta[x.cat] || 0) + 1; });
+    pintarChips(cuenta);
+    $('#mapaG').outerHTML = `<p class="aviso">${ic('alerta')}<span>Sin señal el mapa no carga. Aquí tiene las órdenes pendientes y los clientes a cortar:</span></p>
+      <ul class="lista">${puntos.filter((x) => x.cat === 'orden' || x.cat === 'cortar').slice(0, 60).map((x) => `<li><a href="${x.ot ? '#/orden/' + encodeURIComponent(x.ot.ref) : '#/cliente/' + esc(x.cli.ID_CLIENTE)}"><div><b>${esc(x.ot ? OT_NOMBRE[x.ot.tipo] || x.ot.tipo : x.cli.NOMBRES)}</b>
+        <small>${esc(x.cli ? x.cli.NOMBRES : x.ot.detalle || '')} · ${esc(x.zona)}</small></div>${ic('flecha', 'fin')}</a></li>`).join('') || '<li class="vacio">Nada pendiente.</li>'}</ul>`;
+    $('#mgYo').hidden = true;
+    return;
+  }
+  let L;
+  try { L = await cargarLeaflet(); } catch (e) { $('#mgTxt').textContent = e.message; return; }
+  if (!$('#mapaG')) return;                              // el usuario ya salió de la pantalla
+  const mapa = L.map('mapaG', { zoomControl: true }).setView([-11.4325, -74.4825], 13);
+  await ponerCapas(L, mapa, $('#mgCapas'));
+  const capa = L.layerGroup().addTo(mapa);
+  let primera = true, yo = null;
+  const icono = (cat) => { const c = MAPA_CAT[cat]; return L.divIcon({ className: 'mk-envoltura', html: `<span class="mk mk-${c.color} ${c.forma || ''}">${ic(c.icono)}</span>`, iconSize: [32, 32], iconAnchor: [16, 16], popupAnchor: [0, -14] }); };
+  const iconoOt = (o) => { const [icn, col] = OT_VISUAL[o.tipo] || ['lista', 'azul']; return L.divIcon({ className: 'mk-envoltura', html: `<span class="mk mk-${col} cuadro">${ic(icn)}</span>`, iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -14] }); };
+  const globo = (x) => {
+    const tel = x.cli && (x.cli.TELEFONO || ''), r = x.cli ? D.resumen[x.cli.ID_CLIENTE] || {} : {};
+    const cab = x.ot ? `<b>${esc(OT_NOMBRE[x.ot.tipo] || x.ot.tipo)}</b><small>${esc(x.ot.detalle || '')}</small>${x.cli ? `<small>${esc(x.cli.NOMBRES)}</small>` : ''}`
+      : `<b>${esc(x.cli.NOMBRES)}</b><small>${esc(x.cli.ID_CLIENTE)} · ${esc(x.cat === 'cortar' ? 'A CORTAR' : r.ESTADO || '')}${Number(r.MESES_ADEUDA) > 0 ? ' · ' + esc(r.MESES_ADEUDA) + ' mes(es)' : ''}${Number(r.DEUDA_VENCIDA) > 0 ? ' · debe ' + soles(r.DEUDA_VENCIDA) : ''}</small>`;
+    return `<div class="globo-mapa">${cab}${x.zona ? `<small>${ic('ubicacion')}${esc(x.zona)}</small>` : ''}<div class="globo-acc">
+      ${x.ot ? `<a class="mini" href="#/orden/${encodeURIComponent(x.ot.ref)}">${ic('lista')}Ver orden</a>` : ''}
+      ${x.cli && x.cli.ID_CLIENTE ? `<a class="mini" href="#/cliente/${esc(x.cli.ID_CLIENTE)}">${ic('usuario')}Ficha</a>` : ''}
+      ${tel ? `<a class="mini" href="tel:${esc(String(tel).replace(/\s+/g, ''))}">${ic('telefono')}Llamar</a>` : ''}
+      <a class="mini verde" href="${comoLlegar(x.p)}" target="_blank" rel="noopener">${ic('flecha')}Cómo llegar</a></div></div>`;
+  };
+  function pintar() {
+    capa.clearLayers();
+    const cuenta = {}, visibles = [];
+    puntos.forEach((x) => {
+      if (zona && x.zona !== zona) return;
+      cuenta[x.cat] = (cuenta[x.cat] || 0) + 1;
+      if (!ver[x.cat]) return;
+      visibles.push(x.p);
+      L.marker(x.p, { icon: x.ot ? iconoOt(x.ot) : icono(x.cat), zIndexOffset: x.ot ? 1000 : x.cat === 'cortar' ? 500 : 0,
+        keyboard: true, title: x.ot ? (OT_NOMBRE[x.ot.tipo] || '') : x.cli.NOMBRES }).bindPopup(globo(x), { maxWidth: 260 }).addTo(capa);
+    });
+    pintarChips(cuenta);
+    $('#mgTxt').textContent = `${visibles.length} punto(s) en el mapa${zona ? ' · zona ' + zona : ''}.`;
+    if (primera && visibles.length) { mapa.fitBounds(L.latLngBounds(visibles), { padding: [30, 30], maxZoom: 16 }); primera = false; }
+  }
+  $('#mgZona').onchange = () => { zona = $('#mgZona').value; kvSet('mapaZona', zona); primera = true; pintar(); };
+  $('#mgYo').onclick = () => navigator.geolocation && navigator.geolocation.getCurrentPosition((g) => {
+    const p = [g.coords.latitude, g.coords.longitude];
+    if (yo) yo.setLatLng(p); else yo = L.marker(p, { icon: L.divIcon({ className: 'mk-envoltura', html: '<span class="mk-yo"></span>', iconSize: [22, 22], iconAnchor: [11, 11] }), zIndexOffset: 2000 }).bindPopup('Usted está aquí').addTo(mapa);
+    mapa.setView(p, Math.max(mapa.getZoom(), 15));
+  }, () => aviso('No se pudo obtener su ubicación (¿GPS apagado?).', 'error'), { enableHighAccuracy: true, timeout: 15000 });
+  pintar();
+  setTimeout(() => mapa.invalidateSize(), 200);
 }
 
 // ---- CONFIGURACIÓN: planes, modos, zonas y métodos (solo admin) ---------------------------
@@ -1306,6 +1477,9 @@ function vReactivar(idServ) {
   const otros = deBaja ? serviciosDe(s.ID_CLIENTE).filter((x) => x.ID_SERV !== s.ID_SERV && x.ESTADO === 'Baja')
     : duo && duo.todos.some((x) => x.ID_SERV === s.ID_SERV)
     ? duo.todos.filter((x) => x.ID_SERV !== s.ID_SERV && (x.ESTADO === 'Cortado' || x.ESTADO === 'Suspendido') && !pausaDe(x.ID_SERV)) : [];
+  // paquete: si se entró por el CATV, se abre el del INTERNET (lleva el PPPoE) y el CATV va junto
+  const inetJunto = esCatv(s) && otros.find((x) => !esCatv(x));
+  if (inetJunto) { location.replace('#/reactivar/' + encodeURIComponent(inetJunto.ID_SERV)); return; }
   vista().innerHTML = `<section class="form"><h2>${deBaja ? 'Volver a activar' : 'Reactivar servicio'}</h2>
     ${deBaja ? `<p class="aviso">${ic('info')}<span>Estaba dado de baja${s.FECHA_FIN ? ' desde el ' + esc(txtFecha(s.FECHA_FIN)) : ''}. Vuelve a cobrarse desde la fecha que elija (el primer mes por días). Su deuda anterior se mantiene.</span></p>` : ''}
     <p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.ESTADO)} · PPPoE anterior ${esc(s.PPPOE_ANT || '-')}</p>
@@ -1314,7 +1488,8 @@ function vReactivar(idServ) {
     <label>Tarifa mensual (S/)<input id="tarifa" type="number" step="0.10" inputmode="decimal" value="${Number(s.TARIFA) || ''}"></label>
     <label>Fecha de reactivación<input id="fecha" type="date" value="${hoyISO()}" max="${hoyISO()}"></label>
     <label>Modo / equipo<select id="modoR"><option value="">— sin modo —</option>${opcionesModo(s.MODO)}</select></label>
-    <label>PPPoE<select id="ppp"><option value="">(sin PPPoE)</option>${propio.concat(disp).map((p) => optPPPoE(p, p === (s.PPPOE || s.PPPOE_ANT))).join('')}</select></label>
+    ${esCatv(s) ? `<input type="hidden" id="ppp" value=""><p class="globo">${ic('tv')}<span>Este es el servicio de <b>CATV</b> (cable): no lleva PPPoE. El PPPoE es solo del internet.</span></p>`
+      : `<div><span class="etq">PPPoE del internet</span>${campoPPPoE('ppp', s.PPPOE || (disp.includes(s.PPPOE_ANT) ? s.PPPOE_ANT : ''), { permitir: propio, titulo: 'PPPoE del internet', paraQuien: s.CLIENTE })}</div>`}
     <div id="pror"></div>
     <label class="check"><input type="checkbox" id="manual"> Modificar el monto del primer mes manualmente</label>
     <div id="manualWrap" hidden><label>Monto del primer mes (S/)<div class="fila"><input id="primer" type="number" step="0.10" inputmode="decimal">
@@ -1368,8 +1543,8 @@ function vReactivar(idServ) {
 /** Desde el inventario: elegir a qué cliente (servicio activo sin PPPoE) se asigna un código Disponible. */
 function asignarDesdePPPoE(cod, alTerminar) {
   const p = D.pppoe.find((x) => String(x.CODIGO) === String(cod)) || {};
-  const libres = D.servicios.filter((s) => s.ESTADO === 'Activo' && !s.PPPOE);
-  const m = modal(`<h3 id="dlgT">Asignar ${esc(cod)}</h3><p class="sub">Titular: ${esc(p.TITULAR || '-')}. Solo se muestran servicios activos sin PPPoE (${libres.length}).</p>
+  const libres = D.servicios.filter((s) => s.ESTADO === 'Activo' && !s.PPPOE && !esCatv(s));   // el CATV nunca lleva PPPoE
+  const m = modal(`<h3 id="dlgT">Asignar ${esc(cod)}</h3><p class="sub">Titular: ${esc(p.TITULAR || '-')}. Solo se muestran servicios de INTERNET activos sin PPPoE (${libres.length}). En un paquete DUO va al INTERNET; el CATV no usa PPPoE.</p>
     <input id="asQ" class="buscador" type="search" placeholder="Nombre, DNI, código o zona" autocomplete="off" aria-label="Buscar cliente">
     <ul class="lista" id="asRes"></ul><button class="btn secundario" id="asNo">Cancelar</button>`);
   const pintarRes = () => {
@@ -1377,15 +1552,14 @@ function asignarDesdePPPoE(cod, alTerminar) {
     const lista = libres.filter((s) => { const c = D.porId[s.ID_CLIENTE] || {};
       return !q || [s.CLIENTE, s.ID_CLIENTE, s.ID_SERV, c.DNI_RUC, c.ZONA, s.PLAN].some((v) => String(v || '').toLowerCase().includes(q)); }).slice(0, 40);
     $('#asRes').innerHTML = lista.map((s) => `<li><a href="#" data-serv="${esc(s.ID_SERV)}"><div><b>${esc(s.CLIENTE)}</b>
-      <small>${esc(s.ID_CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.PLAN)} · ${esc((D.porId[s.ID_CLIENTE] || {}).ZONA || '')}</small></div>${ic('flecha', 'fin')}</a></li>`).join('')
+      <small>${esc(s.ID_CLIENTE)} · ${esc(s.ID_SERV)} · <span class="chip e-activo">${ic('router')}INTERNET</span> ${esc(s.PLAN)} · ${esc((D.porId[s.ID_CLIENTE] || {}).ZONA || '')}</small></div>${ic('flecha', 'fin')}</a></li>`).join('')
       || '<li class="vacio">Ningún servicio activo sin PPPoE coincide.</li>';
     $('#asRes').querySelectorAll('[data-serv]').forEach((a) => { a.onclick = async (e) => {
       e.preventDefault();
       const s = servicioPorId(a.dataset.serv);
       cerrarModal();
       if (!(await confirmar(`${cod} (${p.TITULAR || 'sin titular'})\n→ ${s.CLIENTE} · ${s.ID_SERV}`, { titulo: '¿Asignar este PPPoE?', si: 'Asignar' }))) return;
-      await encolar({ tipo: 'ASIGNAR_PPPOE', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, codigoPPPoE: cod, fecha: hoyISO() });
-      p.ESTADO = 'Asignado'; p.CLIENTE = s.CLIENTE; p.ID_CLIENTE = s.ID_CLIENTE; s.PPPOE = cod;
+      await encolar({ tipo: 'ASIGNAR_PPPOE', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, codigoPPPoE: cod, fecha: hoyISO() });   // se ve al instante (aplicarPendientes)
       aviso(navigator.onLine ? 'Asignado.' : 'Guardado: se enviará al volver la señal.');
       if (alTerminar) alTerminar();
     }; });
@@ -1402,6 +1576,94 @@ function optPPPoE(cod, sel = false) {
   return `<option value="${esc(cod)}" ${sel ? 'selected' : ''}>${esc(cod)}${p.TITULAR ? ' · ' + esc(p.TITULAR) : ''}</option>`;
 }
 
+// ---- PPPoE: piezas compartidas (inventario, ventana de elegir, alta, reactivar) -------------
+/** Historial agrupado por código (el más reciente primero). */
+function histPorCodigo() {
+  const hist = {};
+  D.histPPPoE.forEach((h) => { (hist[h.CODIGO] = hist[h.CODIGO] || []).push(h); });
+  Object.values(hist).forEach((l) => l.sort((x, y) => String(y.F_DESDE).localeCompare(String(x.F_DESDE))));
+  return hist;
+}
+/** Busca por código, titular, cliente actual o un cliente que lo usó antes. */
+const coincidePPPoE = (p, q, hist) => !q || [p.CODIGO, p.CLIENTE, p.ID_CLIENTE, p.TITULAR].some((v) => String(v || '').toLowerCase().includes(q)) ||
+  (hist[p.CODIGO] || []).some((h) => String(h.CLIENTE || '').toLowerCase().includes(q));
+const chipPPPoE = (e) => (e === 'Disponible' ? 'e-activo' : e === 'Asignado' ? 'e-pend' : 'e-moroso');
+const marcaPend = (x) => (x && x._pend ? `<span class="chip e-porvencer pend-local" title="Guardado en este celular; se enviará solo">${ic('reloj')}por enviar</span>` : '');
+
+/**
+ * VENTANA FLOTANTE para elegir un PPPoE (alta, nuevo servicio, reactivar, asignar).
+ * Lista los Disponibles con buscador; "Todos" muestra también los ocupados (no se pueden elegir).
+ * permitir: códigos ocupados que igual se pueden elegir (ej. el que el cliente ya tenía).
+ * Devuelve el código elegido, '' (sin PPPoE) o null (cancelar).
+ */
+function elegirPPPoE({ actual = '', permitir = [], titulo = 'Elegir PPPoE', paraQuien = '' } = {}) {
+  return new Promise((ok) => {
+    let filtro = 'Disponible';
+    const hist = histPorCodigo(), libres = D.pppoe.filter((p) => p.ESTADO === 'Disponible').length;
+    const m = modal(`<h3 id="dlgT" class="tit-ic">${ic('router')}${esc(titulo)}</h3>
+      ${paraQuien ? `<p class="sub">Para: <b>${esc(paraQuien)}</b></p>` : ''}
+      <p class="globo">${ic('info')}<span>Toque un código <b>Disponible</b>. Puede buscar por código, titular o por un cliente que lo usó antes.</span></p>
+      <input id="epQ" class="buscador" type="search" placeholder="Código, titular o cliente anterior" autocomplete="off" inputmode="search" aria-label="Buscar PPPoE">
+      <div class="acciones-sel" id="epF"></div><p class="sub" id="epT"></p>
+      <ul class="lista ep-lista" id="epL"></ul>
+      <div class="acciones"><button class="btn" id="epNo">Cancelar</button><button class="btn" id="epSin">Sin PPPoE (asignar después)</button></div>`);
+    prepararDialogo(m, () => ok(null));
+    const fin = (v) => { cerrarModal(); ok(v); };
+    const elegible = (p) => p.ESTADO === 'Disponible' || permitir.map(String).includes(String(p.CODIGO));
+    const pintar = () => {
+      const q = $('#epQ').value.trim().toLowerCase();
+      $('#epF').innerHTML = [['Disponible', `Disponibles (${libres})`], ['Todos', 'Todos']].map(([v, t]) =>
+        `<button class="mini ${v === filtro ? 'sel' : ''}" data-f="${v}" aria-pressed="${v === filtro}">${t}</button>`).join('');
+      const lista = D.pppoe.filter((p) => (filtro === 'Todos' || elegible(p)) && coincidePPPoE(p, q, hist))
+        .sort((x, y) => (q && String(y.CODIGO).toLowerCase() === q) - (q && String(x.CODIGO).toLowerCase() === q) || elegible(y) - elegible(x));
+      $('#epT').textContent = lista.length > 40 ? `${lista.length} códigos · mostrando 40. Escriba para afinar.` : `${lista.length} código(s)`;
+      $('#epL').innerHTML = lista.slice(0, 40).map((p) => {
+        const sirve = elegible(p), ant = (hist[p.CODIGO] || []).find((h) => h.F_HASTA);
+        return `<li><button type="button" class="ep-item ${sirve ? '' : 'apagado'} ${String(p.CODIGO) === String(actual) ? 'sel' : ''}" data-c="${esc(p.CODIGO)}" ${sirve ? '' : 'disabled'}>
+          <span class="ep-ic">${ic('router')}</span>
+          <span class="ep-txt"><b>${esc(p.CODIGO)}</b><small>Titular: ${esc(p.TITULAR || '-')}</small>
+            ${!sirve && p.CLIENTE ? `<small>Lo usa: ${esc(p.CLIENTE)}</small>` : ant ? `<small>Antes: ${esc(ant.CLIENTE)}${ant.F_HASTA ? ' (hasta ' + esc(txtFecha(ant.F_HASTA)) + ')' : ''}</small>` : ''}</span>
+          <span class="chip ${chipPPPoE(p.ESTADO)}">${esc(p.ESTADO)}</span></button></li>`;
+      }).join('') || `<li class="vacio">${filtro === 'Disponible' && !q ? 'No hay códigos disponibles. Agréguelos en Más → PPPoE.' : 'Ningún código coincide.'}</li>`;
+      $('#epF').querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { filtro = b.dataset.f; pintar(); }; });
+      $('#epL').querySelectorAll('[data-c]:not([disabled])').forEach((b) => { b.onclick = () => fin(b.dataset.c); });
+    };
+    $('#epQ').addEventListener('input', pintar);
+    $('#epNo').onclick = () => fin(null);
+    $('#epSin').onclick = () => fin('');
+    pintar();
+    $('#epQ').focus();
+  });
+}
+
+/**
+ * Campo PPPoE para formularios: un input oculto (mismo id de siempre, así el formulario lo lee
+ * igual) + un botón grande que abre la ventana de elegir. ops: { permitir, titulo, paraQuien }.
+ */
+const OPS_PPP = {};
+function campoPPPoE(id, actual = '', ops = {}) {
+  OPS_PPP[id] = ops;
+  return `<div class="campo-ppp"><input type="hidden" id="${id}" value="${esc(actual)}">
+    <button type="button" class="ppp-elegir" data-elegirppp="${id}" aria-label="Elegir PPPoE">${textoCampoPPPoE(actual)}</button></div>`;
+}
+function textoCampoPPPoE(cod) {
+  const p = cod && D.pppoe.find((x) => String(x.CODIGO) === String(cod));
+  return cod ? `${ic('router')}<span class="ppp-txt"><b>${esc(cod)}</b><small>${esc((p && p.TITULAR) || '')}</small></span><span class="ppp-cambiar">Cambiar</span>`
+    : `${ic('router')}<span class="ppp-txt"><b>Elegir PPPoE</b><small>Toque para buscar un código disponible</small></span>${ic('flecha', 'fin')}`;
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-elegirppp]');
+  if (!b) return;
+  e.preventDefault();
+  const id = b.dataset.elegirppp, inp = document.getElementById(id);
+  const v = await elegirPPPoE(Object.assign({ actual: inp.value }, OPS_PPP[id] || {}));
+  if (v === null) return;
+  inp.value = v;
+  b.innerHTML = textoCampoPPPoE(v);
+  inp.dispatchEvent(new Event('change', { bubbles: true }));
+  b.focus();
+});
+
 // ---- MÁS -------------------------------------------------------------------------------
 function vMas() {
   vista().innerHTML = `<h2>Más opciones</h2>
@@ -1409,6 +1671,7 @@ function vMas() {
     ${tarjetasAccion([
       { href: '#/nuevo', icono: 'nuevoCliente', t: 'Nuevo cliente', sub: 'Registro por pasos', color: 'verde' },
       { href: '#/ordenes', icono: 'lista', t: 'Órdenes y rutas', sub: 'Pendientes por zona', color: 'azul' },
+      { href: '#/mapa', icono: 'mapa', t: 'Mapa general', sub: 'Clientes y órdenes por color', color: 'cian' },
       { href: '#/cortar', icono: 'cortar', t: 'A cortar', sub: '30 días o más', color: 'rojo' },
       { href: '#/convenios', icono: 'calculadora', t: 'Convenios', sub: 'Cuotas y castigos', color: 'ambar' },
     ], 'dos')}
@@ -1440,7 +1703,48 @@ async function vPerfil() {
     ${tarjetasAccion([
       { href: '#/recordatorios', icono: 'campana', t: 'Recordatorios', sub: 'Avisos de órdenes', color: 'ambar' },
       { href: '#/cuenta', icono: 'usuario', t: 'Mi cuenta', sub: 'Tema, sincronizar, salir', color: 'gris' },
+      { href: '#/guia', icono: 'info', t: 'Cómo funciona', sub: 'Colores, íconos y señal', color: 'azul' },
+      { href: '#/mapa', icono: 'mapa', t: 'Mapa general', sub: 'Clientes y órdenes', color: 'cian' },
     ], 'dos')}</section>`;
+}
+
+// ---- CÓMO FUNCIONA: guía corta para el técnico (dibujos y colores, poco texto) --------------
+function vGuia() {
+  const bloque = (icono, color, titulo, items) => `<div class="tarjeta-form guia"><h3 class="tit-ic"><span class="ta-ic c-${color}">${ic(icono)}</span>${esc(titulo)}</h3>
+    <ul class="guia-lista">${items.map(([i, c, t]) => `<li><span class="mk mk-${c}">${ic(i)}</span><span>${t}</span></li>`).join('')}</ul></div>`;
+  vista().innerHTML = `<section class="form"><a class="volver" href="#/perfil">${ic('atras')}Perfil</a>
+    <h2 class="tit-ic">${ic('info')}Cómo funciona</h2>
+    ${bloque('sync', 'azul', 'Señal y envío de datos', [
+      ['check', 'verde', '<b>En línea:</b> lo que registra se envía solo en segundos.'],
+      ['alerta', 'ambar', '<b>Sin señal:</b> siga trabajando. Todo queda guardado en el celular y se envía solo al volver la señal.'],
+      ['reloj', 'ambar', '<b>Por enviar:</b> cambios guardados que aún no llegan. En la lista se ven con la marca <span class="chip e-porvencer">por enviar</span>.'],
+      ['sync', 'azul', '<b>Act. hace N min:</b> cuándo llegaron los cambios de los otros técnicos. Se actualiza solo cada 3 minutos.'],
+      ['usuario', 'rojo', '<b>Sesión vencida:</b> toque "Continuar con Google" en el aviso. No hace falta cerrar sesión ni perder nada.'],
+    ])}
+    ${bloque('router', 'gris', 'PPPoE', [
+      ['check', 'verde', '<b>Disponible:</b> libre para un cliente nuevo.'],
+      ['usuario', 'azul', '<b>Asignado:</b> lo usa un cliente.'],
+      ['cerrar', 'rojo', '<b>Bloqueado:</b> no se debe usar.'],
+      ['tv', 'violeta', 'Solo el <b>INTERNET</b> lleva PPPoE. El CATV (cable) nunca, aunque sea un paquete DUO.'],
+      ['buscar', 'azul', 'Al registrar, toque <b>Elegir PPPoE</b>: se abre una ventana con buscador (código, titular o cliente anterior).'],
+    ])}
+    ${bloque('mapa', 'cian', 'Mapa general', [
+      ['lista', 'azul', '<b>Cuadrado:</b> orden pendiente (el dibujo dice el tipo).'],
+      ['cortar', 'rojo', '<b>Rojo:</b> cliente a cortar.'],
+      ['alerta', 'ambar', '<b>Ámbar:</b> moroso.'],
+      ['check', 'verde', '<b>Verde:</b> al día.'],
+      ['reloj', 'gris', '<b>Gris:</b> cortado o suspendido.'],
+      ['camara', 'cian', 'Botones <b>Calles · Satélite · Terreno</b>: el terreno muestra cerros y ríos para guiarse en el campo.'],
+    ])}
+    ${bloque('campana', 'ambar', 'Recordatorios', [
+      ['campana', 'ambar', 'Cada día avisa de las órdenes de <b>hoy</b> y las <b>atrasadas</b>, hasta que se marquen como hechas.'],
+      ['calendario', 'azul', 'Con la app cerrada avisa el calendario de Google "D@NDINET Órdenes" (se repite cada día).'],
+    ])}
+    ${bloque('calculadora', 'verde', 'Cliente nuevo', [
+      ['calculadora', 'verde', 'El primer mes se calcula por días. Si acordó otro precio, toque la cifra y cámbiela.'],
+      ['ajustes', 'violeta', 'Gastos de instalación (mano de obra, materiales…) salen detallados en el recibo.'],
+    ])}
+    <p class="sub">Toque el ícono ${ic('info')} de cada pantalla para ver su explicación.</p></section>`;
 }
 
 // ---- NUEVO / EDITAR CLIENTE --------------------------------------------------------
@@ -1501,9 +1805,9 @@ function vFormCliente(id) {
           <div class="dos"><label>CATV (S/)<input id="s_catvT" type="number" step="0.10" inputmode="decimal" value="${Number((planCatv || {}).TARIFA) || 25}"></label>
             <label>Internet (S/)<input id="s_inetT" type="number" step="0.10" inputmode="decimal"></label></div>
           <p class="resumen-duo" id="s_catvTot"></p></div></div>
-      <div class="tarjeta-form"><h3 class="tit-ic">${ic('router')}PPPoE ${ayuda('PPPoE', 'Es el usuario de internet del cliente en el router de la empresa.\nSolo lo lleva un servicio de internet. Puede asignarlo ahora o después desde la ficha.')}</h3>
+      <div class="tarjeta-form"><h3 class="tit-ic">${ic('router')}PPPoE del internet ${ayuda('PPPoE', 'Es el usuario de internet del cliente en el router de la empresa.\nSolo lo lleva el servicio de INTERNET: el CATV (cable) nunca usa PPPoE.\nPuede asignarlo ahora o después desde la ficha.')}</h3>
         <label class="check" id="s_pppForceWrap" hidden><input type="checkbox" id="s_pppForce"> Asignar PPPoE igual (este plan no es de internet)</label>
-        <label id="s_pppWrap">Código<select id="s_pppoe"><option value="">(asignar después)</option>${pppoeDisponibles().map((p) => optPPPoE(p)).join('')}</select></label></div>
+        <div id="s_pppWrap"><div id="s_pppNota"></div>${campoPPPoE('s_pppoe', '', { titulo: 'PPPoE del internet' })}</div></div>
     </div>`}
 
     <div class="paso" data-paso="wifi" hidden>
@@ -1514,7 +1818,7 @@ function vFormCliente(id) {
     </div>
 
     ${editar ? '' : `<div class="paso" data-paso="cobro" hidden>
-      <div class="tarjeta-form"><h3 class="tit-ic">${ic('calculadora')}Primer mes ${ayuda('Primer mes por días', AYUDA_PRORRATEO)}</h3><div id="cbMeses"></div></div>
+      <div class="tarjeta-form"><h3 class="tit-ic">${ic('calculadora')}Primer mes ${ayuda('Primer mes por días', AYUDA_PRORRATEO + '\n\nPuede cambiar el monto si se acordó otro precio con el cliente: toque la cifra y escriba. El botón de flechas vuelve al cálculo.')}</h3><div id="cbMeses"></div></div>
       <div class="tarjeta-form"><h3 class="tit-ic">${ic('ajustes')}Instalación y gastos ${ayuda('Instalación', 'Opcional. Agregue lo que se cobra por la instalación: mano de obra, accesorios, materiales…\nSe suma en un solo cargo "Instalación" y el detalle queda anotado.')}</h3>
         <ul class="lista-limpia" id="cbInst"></ul><button type="button" class="mini" id="cbMas">${ic('agregar')}Agregar gasto</button></div>
       <div class="resumen-conv total-hoy">A cobrar al instalar <b id="cbTotal">S/ 0.00</b><small id="cbNota"></small></div>
@@ -1597,6 +1901,7 @@ function vFormCliente(id) {
     const inet = conInternet();
     $('#s_pppForceWrap').hidden = inet || !t;
     $('#s_pppWrap').hidden = !(inet || $('#s_pppForce').checked);
+    $('#s_pppNota').innerHTML = s.catv ? `<p class="globo">${ic('tv')}<span>Se asigna al servicio de <b>INTERNET</b>. El CATV (cable) no usa PPPoE.</span></p>` : '';
   };
   if (!editar) {
     $('#s_plan').onchange = (e) => {
@@ -1625,18 +1930,34 @@ function vFormCliente(id) {
     $('#cbInst').appendChild(li);
   };
   const gastos = () => [...vista().querySelectorAll('#cbInst .gasto')].map((li) => ({ concepto: li.querySelector('select').value, monto: r2(Number(li.querySelector('input').value || 0)) })).filter((g) => g.monto > 0);
+  // el técnico puede cambiar el monto del primer mes (precio acordado); si cambia el plan o la fecha, vuelve al cálculo
+  let manualPM = {}, baseManual = '';
   function pintarCobro() {
     if (editar) return;
     const s = servicio(), fe = $('#s_inicio').value || hoyISO(), dia = Number(fe.slice(8, 10));
+    const base = [s.plan, s.tarifa, s.catv ? s.catv.tarifa : '', fe].join('|');
+    if (base !== baseManual) { manualPM = {}; baseManual = base; }
     const prorr = D.config.ProrratearAlta !== 'No' && dia > 1;
-    const linea = (nombre, t) => { const p = prorrateoPlan(0, t, fe), m = prorr ? p.conNueva : r2(t);
-      return { nombre, t, m, txt: prorr ? `${p.restantes} de ${p.diasMes} días` : 'mes completo' }; };
-    const filas = [linea(nombreServicio(s.plan) || 'Servicio', s.tarifa)].concat(s.catv ? [linea('SERVICIO DE CATV', s.catv.tarifa)] : []);
-    $('#cbMeses').innerHTML = `<table class="periodos"><tbody>${filas.map((f) => `<tr><td><b>${esc(f.nombre.replace(/^SERVICIO DE /, ''))}</b><small> ${esc(txtPeriodo(fe))} · ${esc(f.txt)}</small></td><td>${soles(f.m)}</td></tr>`).join('')}</tbody></table>
+    const linea = (k, nombre, t) => { const p = prorrateoPlan(0, t, fe), sug = prorr ? p.conNueva : r2(t);
+      return { k, nombre, t, sug, m: manualPM[k] !== undefined ? manualPM[k] : sug, txt: prorr ? `${p.restantes} de ${p.diasMes} días` : 'mes completo' }; };
+    const filas = [linea('inet', nombreServicio(s.plan) || 'Servicio', s.tarifa)].concat(s.catv ? [linea('catv', 'SERVICIO DE CATV', s.catv.tarifa)] : []);
+    $('#cbMeses').innerHTML = `<table class="periodos pm-tabla"><tbody>${filas.map((f) => { const man = manualPM[f.k] !== undefined;
+      return `<tr><td><b>${esc(f.nombre.replace(/^SERVICIO DE /, ''))}</b><small> ${esc(txtPeriodo(fe))} · ${esc(f.txt)}</small>${man ? `<small class="pm-sug">${ic('editar')}Cambiado a mano · cálculo ${soles(f.sug)}</small><button type="button" class="mini pm-rest" data-rest="${f.k}">${ic('sync')}Volver al cálculo</button>` : ''}</td>
+        <td class="pm-celda"><span class="pm-caja ${man ? 'manual' : ''}"><span class="tenue">S/</span><input class="pm-in" data-k="${f.k}" type="number" min="0" step="0.10" inputmode="decimal" value="${r2(f.m).toFixed(2)}" aria-label="Primer mes ${esc(f.nombre)}"></span></td></tr>`; }).join('')}</tbody></table>
       <p class="sub">Desde ${esc(txtPeriodo(sumarMesTxt(fe.slice(0, 7), 1) + '-01'))}: ${soles(filas.reduce((t, f) => t + f.t, 0))} al mes.</p>`;
-    const inst = gastos().reduce((t, g) => t + g.monto, 0), prim = filas.reduce((t, f) => t + f.m, 0);
+    $('#cbMeses').querySelectorAll('.pm-in').forEach((x) => {
+      const f = filas.find((y) => y.k === x.dataset.k);
+      x.oninput = () => { const v = r2(Math.max(0, Number(x.value || 0))); if (Math.abs(v - f.sug) < 0.005) delete manualPM[f.k]; else manualPM[f.k] = v; totalesCobro(); };
+      x.onchange = () => pintarCobro();
+    });
+    $('#cbMeses').querySelectorAll('[data-rest]').forEach((b) => { b.onclick = () => { delete manualPM[b.dataset.rest]; pintarCobro(); }; });
+    totalesCobro();
+  }
+  function totalesCobro() {
+    const prim = [...vista().querySelectorAll('#cbMeses .pm-in')].reduce((t, x) => t + r2(Math.max(0, Number(x.value || 0))), 0);
+    const inst = gastos().reduce((t, g) => t + g.monto, 0);
     $('#cbTotal').textContent = soles(prim + inst);
-    $('#cbNota').textContent = `Primer mes ${soles(prim)}${inst ? ' + instalación ' + soles(inst) : ''}`;
+    $('#cbNota').textContent = `Primer mes ${soles(prim)}${inst ? ' + instalación ' + soles(inst) : ''}${Object.keys(manualPM).length ? ' (monto cambiado a mano)' : ''}`;
   }
   if (!editar) { $('#cbMas').onclick = () => { agregarGasto(); }; }
 
@@ -1706,7 +2027,9 @@ function vFormCliente(id) {
       (ppp ? `\nPPPoE ${ppp}` : '') + `\nA cobrar al instalar: ${$('#cbTotal').textContent}`, { titulo: '¿Registrar cliente?', si: 'Registrar' }))) return;
     d.FECHA_ALTA = fe;
     const op = await encolar({ tipo: 'ALTA_CLIENTE', datos: { cliente: d, servicio: { plan: s.plan, tarifa: s.tarifa, modo: $('#s_modo').value,
-      pppoe: ppp, fechaInicio: fe, montoInstalacion: r2(inst.reduce((t, g) => t + g.monto, 0)), instalacion: inst, catv: s.catv } } });
+      pppoe: ppp, fechaInicio: fe, montoInstalacion: r2(inst.reduce((t, g) => t + g.monto, 0)), instalacion: inst,
+      // monto del primer mes cambiado a mano (si no, el servidor calcula el prorrateo como siempre)
+      montoPrimerMes: manualPM.inet, catv: s.catv && Object.assign({}, s.catv, manualPM.catv !== undefined ? { montoPrimerMes: manualPM.catv } : {}) } } });
     const irCobrar = $('#cbCobrar').checked;
     if (!navigator.onLine || !irCobrar) {
       aviso(navigator.onLine ? 'Cliente enviado. Aparecerá en la búsqueda en unos segundos.' : 'Guardado sin señal: se registrará al volver la conexión.');
@@ -1731,12 +2054,10 @@ function vFormCliente(id) {
 // ---- PPPoE ---------------------------------------------------------------------------
 function vPPPoE() {
   let filtro = 'Todos';
-  // historial agrupado por código, una sola vez (búsqueda instantánea y sin consultar al servidor)
-  const hist = {};
-  D.histPPPoE.forEach((h) => { (hist[h.CODIGO] = hist[h.CODIGO] || []).push(h); });
-  Object.values(hist).forEach((l) => l.sort((x, y) => String(y.F_DESDE).localeCompare(String(x.F_DESDE))));
+  // historial agrupado por código (búsqueda instantánea y sin consultar al servidor); se rehace al recibir datos
+  let hist = histPorCodigo();
   const cuenta = (e) => D.pppoe.filter((p) => p.ESTADO === e).length;
-  vista().innerHTML = `<h2>PPPoE</h2>
+  vista().innerHTML = `<h2 class="tit-ic">${ic('router')}PPPoE ${ayuda('PPPoE', 'Inventario de usuarios de internet (PPPoE) del router.\nDisponible: libre para un cliente nuevo. Asignado: lo usa un cliente. Bloqueado: no se debe usar.\nLo que usted cambia se ve al instante en este celular (con la marca "por enviar" mientras no llegue al servidor).\nAl abrir esta pantalla se piden los cambios de los otros técnicos.')}</h2>
     <input id="ppq" class="buscador" type="search" placeholder="Código PPPoE, cliente o titular" autocomplete="off" inputmode="search" aria-label="Buscar PPPoE">
     <div class="acciones-sel" id="ppFiltros"></div>
     <button class="btn" id="agregar">${ic('agregar')}Agregar código</button>
@@ -1749,7 +2070,7 @@ function vPPPoE() {
       ${cli ? `<small>Cliente: <a href="#/cliente/${esc(p.ID_CLIENTE)}">${esc(p.ID_CLIENTE)} · ${esc(p.CLIENTE)}</a>${cli.ZONA ? ' · ' + esc(cli.ZONA) : ''}${res.ESTADO ? ` <span class="chip ${claseEstado(res.ESTADO)}">${esc(res.ESTADO)}</span>` : ''}</small>` : ''}
       ${anteriores.length ? `<details class="hist"><summary>Usado antes por ${anteriores.length} cliente(s)</summary><ul>${anteriores.map((h) =>
         `<li><a href="#/cliente/${esc(h.ID_CLIENTE)}">${esc(h.ID_CLIENTE)} · ${esc(h.CLIENTE)}</a><small>${esc(txtFecha(h.F_DESDE)) || '¿?'} → ${esc(txtFecha(h.F_HASTA)) || 'hoy'}${h.MOTIVO_FIN ? ' · ' + esc(h.MOTIVO_FIN) : ''}</small></li>`).join('')}</ul></details>` : ''}</div>
-      <div class="der"><span class="chip ${p.ESTADO === 'Disponible' ? 'e-activo' : p.ESTADO === 'Asignado' ? 'e-pend' : 'e-moroso'}">${esc(p.ESTADO)}</span>
+      <div class="der"><span class="chip ${chipPPPoE(p.ESTADO)}">${esc(p.ESTADO)}</span>${marcaPend(p)}
       <button class="mini" data-editar="${esc(p.CODIGO)}">Editar</button>
       ${p.ESTADO === 'Asignado' ? `<button class="mini" data-acc="LIBERAR_PPPOE" data-c="${esc(p.CODIGO)}">Liberar</button>` : ''}
       ${p.ESTADO === 'Disponible' ? `<button class="mini verde" data-asignar="${esc(p.CODIGO)}">Asignar</button>` : ''}
@@ -1758,12 +2079,11 @@ function vPPPoE() {
   };
   const MAX = 50;
   const pintar = () => {
+    hist = histPorCodigo();
     $('#ppFiltros').innerHTML = ['Todos', 'Disponible', 'Asignado', 'Bloqueado'].map((e) =>
       `<button class="mini ${e === filtro ? 'sel' : ''}" data-f="${e}">${e}${e === 'Todos' ? '' : ' (' + cuenta(e) + ')'}</button>`).join('');
     const q = $('#ppq').value.trim().toLowerCase();
-    const coincide = (p) => !q || String(p.CODIGO).toLowerCase().includes(q) || String(p.CLIENTE || '').toLowerCase().includes(q) ||
-      String(p.ID_CLIENTE || '').toLowerCase().includes(q) || String(p.TITULAR || '').toLowerCase().includes(q) ||
-      (hist[p.CODIGO] || []).some((h) => String(h.CLIENTE || '').toLowerCase().includes(q));
+    const coincide = (p) => coincidePPPoE(p, q, hist);
     const lista = D.pppoe.filter((p) => (filtro === 'Todos' || p.ESTADO === filtro) && coincide(p))
       .sort((x, y) => (q && String(y.CODIGO).toLowerCase() === q) - (q && String(x.CODIGO).toLowerCase() === q));   // el código exacto primero
     $('#ppTotal').textContent = lista.length > MAX ? `${lista.length} códigos · mostrando ${MAX}. Escriba más para afinar.` : `${lista.length} código(s)`;
@@ -1776,7 +2096,6 @@ function vPPPoE() {
       if (t === null) return;
       if (t.trim().length < 3) return aviso('Escriba el titular.', 'error');
       await encolar({ tipo: 'EDITAR_PPPOE', codigoPPPoE: b.dataset.editar, datos: { titular: t.trim() } });
-      p.TITULAR = t.trim().toUpperCase();
       aviso(navigator.onLine ? 'Guardado.' : 'Guardado: se enviará al volver la señal.');
       pintar();
     }; });
@@ -1789,7 +2108,7 @@ function vPPPoE() {
       if (!motivo && acc !== 'DESBLOQUEAR_PPPOE') return;
       await encolar({ tipo: acc, codigoPPPoE: cod, motivo: motivo || 'Desbloqueo' });
       aviso(navigator.onLine ? 'Enviado.' : 'Guardado: se enviará al volver la señal.');
-      b.disabled = true;
+      pintar();
     }; });
   };
   $('#ppq').addEventListener('input', pintar);
@@ -1801,8 +2120,11 @@ function vPPPoE() {
     if (titular === null) return;
     await encolar({ tipo: 'AGREGAR_PPPOE', codigoPPPoE: cod, datos: { titular: titular.trim() } });
     aviso(navigator.onLine ? 'Código enviado.' : 'Guardado: se enviará al volver la señal.');
+    pintar();
   };
   pintar();
+  REPINTAR = pintar;                         // tras sincronizar: lista al día sin perder buscador ni filtro
+  if (navigator.onLine) sincronizarParcial();  // pide al momento lo que cambiaron los otros técnicos
 }
 
 // ---- CAMBIO DE PLAN CON PRORRATEO ----------------------------------------------------------
@@ -2929,36 +3251,71 @@ async function vOrden(ref) {
 // ---- RECORDATORIOS: avisos en este celular + calendario compartido de Google --------------------
 const avisosSoportados = () => 'Notification' in window && 'serviceWorker' in navigator;
 
-/** Aviso del sistema con las órdenes de hoy (una vez por día y por cantidad, si el técnico lo activó). */
-async function avisarOrdenesHoy(deHoy) {
+/**
+ * AVISOS PERSISTENTES DE PENDIENTES (desde la 1.25.0): las órdenes de hoy Y las atrasadas avisan cada día
+ * hasta que se completen. Modo "una por orden" (Android las agrupa en un solo bloque que se despliega)
+ * o "un solo aviso" con la lista. Los avisos no se borran solos (requireInteraction); al completarse
+ * una orden, su aviso se quita en la siguiente sincronización.
+ */
+const MAX_AVISOS_SUELTOS = 8;     // con más pendientes, un solo aviso con la lista (no llenar la bandeja)
+const lineaAviso = (o, hoy) => {
+  const f = fechaOrden(o), atraso = f && f < hoy ? Math.round((new Date(hoy) - new Date(f)) / 864e5) : 0;
+  return `${atraso ? `ATRASADA ${atraso} día${atraso > 1 ? 's' : ''}` : 'HOY' + ((o.datos && o.datos.hora) ? ' ' + o.datos.hora : '')} · ${OT_NOMBRE[o.tipo] || o.tipo}${zonaOrden(o) ? ' · ' + zonaOrden(o) : ''}`;
+};
+async function avisarPendientes(pend) {
   try {
-    if (!avisosSoportados() || Notification.permission !== 'granted' || !(await kvGet('avisosOt')) || !deHoy.length) return;
-    const marca = hoyISO() + ':' + deHoy.length;
-    if ((await kvGet('avisoOtDia')) === marca) return;
-    await kvSet('avisoOtDia', marca);
-    const reg = await navigator.serviceWorker.ready;
-    const lineas = deHoy.slice(0, 4).map((o) => `${(o.datos && o.datos.hora) || ''} ${OT_NOMBRE[o.tipo] || o.tipo}${zonaOrden(o) ? ' · ' + zonaOrden(o) : ''}`.trim());
-    reg.showNotification(`${deHoy.length} orden(es) para hoy`, { body: lineas.join('\n') + (deHoy.length > 4 ? '\n…' : ''),
-      icon: 'icons/icono-192.png', badge: 'icons/favicon-32.png', tag: 'ordenes-hoy', data: { url: '#/ordenes' } });
+    if (!avisosSoportados() || Notification.permission !== 'granted' || !(await kvGet('avisosOt'))) return;
+    const reg = await navigator.serviceWorker.ready, hoy = hoyISO();
+    const modo = (await kvGet('avisosModo')) || 'orden', sueltos = modo === 'orden' && pend.length <= MAX_AVISOS_SUELTOS;
+    const previos = (await kvGet('avisosMostrados')) || {};        // tag → día en que se mostró
+    const vivos = {};
+    const base = { icon: 'icons/icono-192.png', badge: 'icons/favicon-32.png', requireInteraction: true, lang: 'es' };
+    if (sueltos) {
+      for (const o of pend) {
+        const tag = 'ot-' + o.ref, nuevo = previos[tag] !== hoy;
+        vivos[tag] = hoy;
+        if (!nuevo) continue;                                        // ya avisó hoy: no repetir
+        await reg.showNotification(`${OT_NOMBRE[o.tipo] || 'Orden'} pendiente`, Object.assign({}, base, {
+          body: lineaAviso(o, hoy) + (o.detalle ? '\n' + o.detalle : ''), tag, renotify: true,
+          data: { url: '#/orden/' + encodeURIComponent(o.ref) } }));
+      }
+    } else if (pend.length) {
+      const tag = 'ordenes-pend', firma = hoy + ':' + pend.map((o) => o.ref).sort().join(',');
+      vivos[tag] = firma;
+      if (previos[tag] !== firma) {
+        const lineas = pend.slice(0, 6).map((o) => lineaAviso(o, hoy));
+        await reg.showNotification(`${pend.length} pendiente(s) por hacer`, Object.assign({}, base, {
+          body: lineas.join('\n') + (pend.length > 6 ? `\n+${pend.length - 6} más · toque para ver por zona` : ''), tag, renotify: true,
+          data: { url: '#/ordenes' } }));
+      }
+    }
+    // se quitan los avisos de lo que ya se hizo (o del otro modo)
+    for (const n of await reg.getNotifications()) if ((/^ot-/.test(n.tag) || n.tag === 'ordenes-pend' || n.tag === 'ordenes-hoy') && !vivos[n.tag]) n.close();
+    await kvSet('avisosMostrados', vivos);
   } catch (e) { /* sin avisos: no pasa nada */ }
 }
-/** Después de cada sincronización: revisa las órdenes de hoy (aunque no esté en Inicio). */
+/** Después de cada sincronización (y al abrir): órdenes pendientes de hoy y atrasadas. */
 async function revisarAvisos() {
   const hoy = hoyISO();
-  avisarOrdenesHoy((await ordenesLocales()).filter((o) => o.estado === 'Pendiente' && fechaOrden(o) === hoy));
+  avisarPendientes((await ordenesLocales()).filter((o) => o.estado === 'Pendiente' && fechaOrden(o) && fechaOrden(o) <= hoy)
+    .sort((a, b) => fechaOrden(a).localeCompare(fechaOrden(b))));
 }
 
 async function vRecordatorios() {
   const soporta = avisosSoportados(), perm = soporta ? Notification.permission : 'no', activo = !!(await kvGet('avisosOt'));
   const estado = !soporta ? ['gris', 'Este celular no permite avisos de la app.'] : perm === 'denied' ? ['rojo', 'Bloqueados: actívelos en Ajustes del celular → Apps → Chrome → Notificaciones.']
-    : perm === 'granted' && activo ? ['verde', 'Activos: le avisaremos de las órdenes de hoy al abrir o sincronizar la app.'] : ['ambar', 'Desactivados.'];
+    : perm === 'granted' && activo ? ['verde', 'Activos: cada día le avisaremos de las órdenes de hoy y las atrasadas, hasta que se completen.'] : ['ambar', 'Desactivados.'];
+  const modo = (await kvGet('avisosModo')) || 'orden';
   vista().innerHTML = `<section class="form"><a class="volver" href="#/perfil">${ic('atras')}Perfil</a>
     <h2 class="tit-ic">${ic('campana')}Recordatorios</h2>
-    <div class="tarjeta-form"><h3 class="tit-ic">${ic('celular')}Avisos en este celular ${ayuda('Avisos de la app', 'La app avisa de las órdenes y hojas de ruta programadas para hoy cuando se abre o se sincroniza.\nCon la app cerrada no puede avisar: para eso está el calendario de Google (abajo).')}</h3>
+    <div class="tarjeta-form"><h3 class="tit-ic">${ic('celular')}Avisos en este celular ${ayuda('Avisos de la app', 'La app avisa de las órdenes y hojas de ruta de HOY y de las ATRASADAS, una vez al día, hasta que se marquen como hechas. El aviso queda en la bandeja hasta que lo toque o lo deslice.\nSe revisa al abrir la app y en cada sincronización (cada 3 minutos con la app abierta).\nCon la app cerrada no puede avisar: para eso está el calendario de Google (abajo), que repite el aviso cada día.')}</h3>
       <p class="estado-aviso c-${estado[0]}">${esc(estado[1])}</p>
+      ${perm === 'granted' && activo ? `<div class="modo-avisos" role="group" aria-label="Cómo avisar">
+        <button type="button" class="tarjeta-accion ${modo === 'orden' ? 'sel' : ''}" data-modo="orden" aria-pressed="${modo === 'orden'}"><span class="ta-ic c-azul">${ic('lista')}</span><span class="ta-txt"><b>Uno por orden</b><small>El celular los junta en un bloque que se despliega (hasta ${MAX_AVISOS_SUELTOS}; con más, uno solo)</small></span></button>
+        <button type="button" class="tarjeta-accion ${modo === 'uno' ? 'sel' : ''}" data-modo="uno" aria-pressed="${modo === 'uno'}"><span class="ta-ic c-violeta">${ic('campana')}</span><span class="ta-txt"><b>Un solo aviso</b><small>Con la lista de pendientes</small></span></button></div>` : ''}
       ${soporta && perm !== 'denied' ? `<button class="btn ${activo && perm === 'granted' ? '' : 'verde'}" id="rcAct">${ic('campana')}${activo && perm === 'granted' ? 'Desactivar avisos' : 'Activar avisos'}</button>` : ''}
       ${soporta && perm === 'granted' ? `<button class="btn secundario" id="rcProbar">Probar un aviso</button>` : ''}</div>
-    <div class="tarjeta-form"><h3 class="tit-ic">${ic('calendario')}Calendario de Google ${ayuda('Calendario compartido', 'Cada orden nueva aparece en el calendario "D@NDINET Órdenes" con avisos 1 hora y 15 minutos antes (si no tiene hora, a las 8:00).\nAvisa aunque la app esté cerrada. Al completar o anular, se marca [HECHO] o [ANULADA].')}</h3>
+    <div class="tarjeta-form"><h3 class="tit-ic">${ic('calendario')}Calendario de Google ${ayuda('Calendario compartido', 'Cada orden nueva aparece en el calendario "D@NDINET Órdenes" con avisos 1 hora y 15 minutos antes (si no tiene hora, a las 8:00).\nSe REPITE CADA DÍA mientras siga pendiente (hasta 30 días) y avisa aunque la app esté cerrada.\nAl completar o anular, deja de repetirse y se marca [HECHO] o [ANULADA].')}</h3>
       <ol class="pasos-texto">
         <li><b>Dueño, una sola vez:</b> en la PC abra el proyecto de Apps Script y ejecute <code>autorizarCalendario</code> (acepte los permisos).</li>
         <li><b>Compartir:</b> en Google Calendar, junto a "D@NDINET Órdenes" toque ⋮ → <i>Configuración y uso compartido</i> → <i>Compartir con determinadas personas</i> → agregue el Gmail de cada técnico.</li>
@@ -2968,11 +3325,16 @@ async function vRecordatorios() {
     if (activo && perm === 'granted') { await kvSet('avisosOt', false); aviso('Avisos desactivados.'); return vRecordatorios(); }
     const p = await Notification.requestPermission();
     if (p !== 'granted') { aviso('Sin permiso del celular no se pueden mostrar avisos.', 'error'); return vRecordatorios(); }
-    await kvSet('avisosOt', true); await kvSet('avisoOtDia', '');
+    await kvSet('avisosOt', true); await kvSet('avisosMostrados', {});
     aviso('Avisos activados.');
     revisarAvisos();
     vRecordatorios();
   };
+  vista().querySelectorAll('[data-modo]').forEach((b) => { b.onclick = async () => {
+    await kvSet('avisosModo', b.dataset.modo); await kvSet('avisosMostrados', {});
+    aviso(b.dataset.modo === 'orden' ? 'Un aviso por cada orden pendiente.' : 'Un solo aviso con la lista.');
+    revisarAvisos(); vRecordatorios();
+  }; });
   if ($('#rcProbar')) $('#rcProbar').onclick = async () => {
     const reg = await navigator.serviceWorker.ready;
     reg.showNotification('D@NDINET · prueba', { body: 'Así se verán los avisos de órdenes.', icon: 'icons/icono-192.png', tag: 'prueba', data: { url: '#/recordatorios' } });
@@ -3104,10 +3466,12 @@ function vAsignarPPPoE(idServ) {
   if (!s) { vista().innerHTML = '<p class="error">Servicio no encontrado.</p>'; return; }
   const disp = pppoeDisponibles();
   vista().innerHTML = `<section class="form"><h2>Asignar PPPoE</h2><p class="sub">${esc(s.CLIENTE)} · ${esc(s.ID_SERV)} · ${esc(s.PLAN)}</p>
-    ${disp.length ? `<label>Código disponible<select id="ppp">${disp.map((p) => optPPPoE(p)).join('')}</select></label>
+    ${esCatv(s) ? `<p class="aviso error">${ic('tv')}<span>Este es el servicio de CATV (cable): no lleva PPPoE. Asígnelo al servicio de INTERNET del cliente.</span></p>`
+      : disp.length ? `${campoPPPoE('ppp', '', { titulo: 'PPPoE del internet', paraQuien: s.CLIENTE })}
     <button class="btn grande verde" id="ok">ASIGNAR</button>` : '<p class="aviso">No hay códigos disponibles. Agregue uno en PPPoE.</p>'}
     <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
-  if (disp.length) $('#ok').onclick = async () => {
+  if (disp.length && !esCatv(s)) $('#ok').onclick = async () => {
+    if (!$('#ppp').value) return aviso('Elija un código PPPoE.', 'error');
     await encolar({ tipo: 'ASIGNAR_PPPOE', idServ: s.ID_SERV, idCliente: s.ID_CLIENTE, codigoPPPoE: $('#ppp').value, fecha: hoyISO() });
     aviso(navigator.onLine ? 'Enviado.' : 'Guardado: se enviará al volver la señal.');
     location.hash = '#/cliente/' + s.ID_CLIENTE;

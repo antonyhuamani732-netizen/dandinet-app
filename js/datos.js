@@ -41,6 +41,51 @@ export function aplicar(s) {
   D.porId = Object.fromEntries(D.clientes.map((c) => [c.ID_CLIENTE, c]));
 }
 
+/**
+ * CAMBIOS LOCALES INMEDIATOS (desde la 1.25.0): lo que el técnico hizo y todavía no llegó al
+ * servidor (sin señal o esperando) se refleja en su copia al instante, para que pueda seguir
+ * trabajando. Se recalcula desde la cola después de cada descarga (no se pierde ni se duplica).
+ * La verdad la sigue teniendo el servidor: si rechaza la operación (ej. otro técnico tomó ese
+ * PPPoE antes), la siguiente descarga muestra el estado real. Las filas tocadas llevan _pend.
+ */
+export function aplicarPendientes(ops) {
+  const pp = (cod) => D.pppoe.find((x) => String(x.CODIGO) === String(cod));
+  const serv = (id) => D.servicios.find((x) => x.ID_SERV === id);
+  const tomar = (cod, idCli, nombre, idServ) => {
+    const p = pp(cod); if (!p || !cod) return;
+    Object.assign(p, { ESTADO: 'Asignado', ID_CLIENTE: idCli || p.ID_CLIENTE || '', CLIENTE: nombre || p.CLIENTE || '(cliente nuevo)', _pend: true });
+    const s = idServ && serv(idServ); if (s) { s.PPPOE = cod; s._pend = true; }
+  };
+  (ops || []).slice().sort((a, b) => String(a.fDispositivo).localeCompare(String(b.fDispositivo))).forEach((o) => {
+    const cli = (o.idCliente && D.porId[o.idCliente]) || {};
+    switch (o.tipo) {
+      case 'ASIGNAR_PPPOE': case 'NUEVO_SERVICIO':
+        tomar(o.codigoPPPoE, o.idCliente, cli.NOMBRES, o.idServ); break;
+      case 'REACTIVAR':
+        if (o.codigoPPPoE) tomar(o.codigoPPPoE, o.idCliente, cli.NOMBRES, o.idServ); break;
+      case 'ALTA_CLIENTE': {
+        const sv = (o.datos && o.datos.servicio) || {}, c = (o.datos && o.datos.cliente) || {};
+        if (sv.pppoe) tomar(sv.pppoe, '', c.nombres || c.NOMBRES, null); break;
+      }
+      case 'LIBERAR_PPPOE': {
+        const p = pp(o.codigoPPPoE); if (!p) break;
+        D.servicios.filter((s) => String(s.PPPOE) === String(p.CODIGO)).forEach((s) => { s.PPPOE = ''; s._pend = true; });
+        Object.assign(p, { ESTADO: 'Disponible', ID_CLIENTE: '', CLIENTE: '', _pend: true }); break;
+      }
+      case 'BLOQUEAR_PPPOE': case 'DESBLOQUEAR_PPPOE': {
+        const p = pp(o.codigoPPPoE); if (p) Object.assign(p, { ESTADO: o.tipo === 'BLOQUEAR_PPPOE' ? 'Bloqueado' : 'Disponible', _pend: true }); break;
+      }
+      case 'EDITAR_PPPOE': {
+        const p = pp(o.codigoPPPoE); if (p && o.datos && o.datos.titular) Object.assign(p, { TITULAR: String(o.datos.titular).toUpperCase(), _pend: true }); break;
+      }
+      case 'AGREGAR_PPPOE':
+        if (o.codigoPPPoE && !pp(o.codigoPPPoE)) D.pppoe.push({ CODIGO: o.codigoPPPoE, TITULAR: String((o.datos && o.datos.titular) || '').toUpperCase(), ESTADO: 'Disponible', _pend: true });
+        break;
+      default:
+    }
+  });
+}
+
 // ---- utilidades de formato ------------------------------------------------------
 export const esc = (v) => String(v === null || v === undefined ? '' : v)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -203,4 +248,19 @@ export function enlaceWhatsApp(telefono, mensaje) {
 export function claseEstado(e) {
   return { Activo: 'e-activo', Moroso: 'e-moroso', Suspendido: 'e-susp', Cortado: 'e-cortado', Baja: 'e-baja',
     Pagado: 'e-activo', Parcial: 'e-porvencer', Vencido: 'e-moroso', 'Por vencer': 'e-porvencer', Pendiente: 'e-pend' }[e] || 'e-pend';
+}
+
+/**
+ * Detalle de la instalación anotado en el alta ("Instalación: Mano de obra S/ 30.00 · Materiales S/ 12.50")
+ * → [{concepto, monto}]; null si no hay detalle o no suma el monto del cargo. Espejo de detalleInstalacion_ (ReciboDocs.gs).
+ */
+export function detalleInstalacion(obs, monto) {
+  const m = /Instalaci[oó]n:\s*(.+)$/i.exec(String(obs || ''));
+  if (!m) return null;
+  const partes = m[1].split(/\s+·\s+/).map((t) => {
+    const x = /^(.*?)\s+S\/\s*([\d,]+(?:\.\d+)?)\s*$/.exec(t.trim());
+    return x ? { concepto: x[1].trim().toUpperCase(), monto: r2(Number(x[2].replace(/,/g, ''))) } : null;
+  });
+  if (!partes.length || partes.some((x) => !x || !(x.monto > 0))) return null;
+  return Math.abs(r2(partes.reduce((t, x) => t + x.monto, 0)) - r2(monto)) < 0.01 ? partes : null;
 }
