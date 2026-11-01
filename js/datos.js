@@ -84,7 +84,7 @@ export function aplicarPendientes(ops) {
         D.avisos = D.avisos || [];
         if (!D.avisos.some((a) => a.ID_SOLICITUD === o.idSolicitud)) D.avisos.push({ ID_AVISO: '', FECHA: o.fDispositivo, ID_CLIENTE: o.idCliente,
           CLIENTE: cli.NOMBRES || '', ZONA: cli.ZONA || '', CAMPANA: d.campana || '', TIPO: d.tipo || '', RESULTADO: d.resultado || '',
-          MONTO: d.monto || 0, USUARIO: o.usuarioLocal || '', OBS: o.motivo || '', ID_SOLICITUD: o.idSolicitud, _pend: true });
+          MONTO: d.monto || 0, USUARIO: o.usuarioLocal || '', OBS: o.motivo || '', ID_SOLICITUD: o.idSolicitud, _pend: o.estadoLocal !== 'ok' });
         break;
       }
       case 'AGREGAR_PPPOE':
@@ -238,9 +238,61 @@ export const pppoeDisponibles = () => D.pppoe.filter((p) => p.ESTADO === 'Dispon
 
 /** Textos por defecto si la plantilla aún no está en la hoja Config. */
 export const MSG_DEFECTO = {
-  MsgRecordatorio: 'Hola {NOMBRE}, le saluda {NEGOCIO}.\\nLe recordamos que el pago de su servicio de {MES} es {MONTO} y vence el {VENCE}.\\n' +
-    'Puede pagar por Yape {YAPE} ({TITULAR}), BCP {BCP} o Banco de la Nación {BN}.\\nSi ya pagó, por favor ignore este mensaje. ¡Gracias por su preferencia!',
+  // formato del negocio (el que ya usaba a mano): detalle por servicio y mes, cuentas y fechas
+  MsgRecordatorio: 'INTERNET {NEGOCIO}:\nEstimado cliente, le recordamos que se encuentra vigente el pago del servicio de {SERVICIO}\nCorrespondiente al MES.\n{DETALLE}\n👇\n💫Los pagos se realizan de manera presencial o por depósito bancario a nuestro número de cuenta.🫧\n👇\n💳 BCP:\n{BCP}\n💳 YAPE:\n{YAPE}\n💳 BN:\n{BN}\n👇\n💫🪪 A nombre de {TITULAR} 💧\n👇\n✅ *ENVIAR* el voucher y/o constancia de pago por este medio indicando NOMBRES, APELLIDOS Y DNI DEL CLIENTE y el mes que corresponde 🪼\n👇\n🚨 FECHA DE PAGO\n{FPAGO}\n🚨 FECHA DE VENCIMIENTO\n{VENCE}\n🚨 FECHA DE SUSPENSIÓN\n{SUSPENSION}\n👇\n💫 Pague a tiempo, evite el corte del servicio y el pago de S/15.00 por reconexión 🔥💡\n👇\n*NOTA:* Reconexión por suspensión 24 horas posterior al reporte del pago realizado. Si realiza el pago antes de la fecha, solo envíenos su constancia de pago para registrarlo. 🌎',
+  DiasSuspension: '0',
 };
+/** El texto de prueba de la 1.26.0 (si quedó guardado en Config) pasa al formato nuevo. */
+const RECORDATORIO_VIEJO = /^Hola \{NOMBRE\}, le saluda \{NEGOCIO\}\.(\\n|\n)Le recordamos que el pago de su servicio de \{MES\}/;
+/** Texto de una plantilla o dato editable: lo guardado en Config o, si está vacío, el de fábrica. */
+export function textoPlantilla(clave) {
+  let t = D.config[clave] === undefined || D.config[clave] === null ? '' : String(D.config[clave]);
+  if (clave === 'MsgRecordatorio' && RECORDATORIO_VIEJO.test(t)) t = '';
+  return (t || MSG_DEFECTO[clave] || '').replace(/\\n/g, '\n');
+}
+
+const MESES_L = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SETIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+const ddmmaaaa = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '');
+const sumarDiasISO = (iso, n) => new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)) + n)).toISOString().slice(0, 10);
+/** Mes que se recuerda en el aviso de pago: desde el día 20, el mes siguiente ("aaaa-mm"). */
+export function campanaActual() { const h = hoyISO(), ym = h.slice(0, 7); return Number(h.slice(8, 10)) >= 20 ? mesSiguiente(ym) : ym; }
+/** "SERVICIO DE INTERNET 20mbp" → "INTERNET"; CATV → "TV CABLE"; plan con ambos → "INTERNET + TV CABLE". */
+export const etiquetaServicio = (plan) => {
+  const n = nombreServicio(plan).toUpperCase(), tv = /CATV|CABLE|\bTV\b/.test(n), net = /INTERNET/.test(n);
+  return net && tv ? 'INTERNET + TV CABLE' : net ? 'INTERNET' : tv ? 'TV CABLE' : (n.replace(/^SERVICIO\s+(DE\s+)?/, '') || 'SERVICIO');
+};
+/**
+ * Lo que se le cobra a un cliente en el aviso del mes ym: todo lo pendiente hasta ese mes (también el mes
+ * que aún no vence), agrupado por servicio. Los meses adelantados (después de ym) no entran.
+ * → { detalle (texto), servicio, total, vence, suspension, fpago ('aaaa-mm-dd'), mes, lineas }
+ */
+export function detalleCobro(idCliente, ym) {
+  const c = D.porId[idCliente] || {};
+  const ks = cargosDe(idCliente).filter((k) => { const p = String(k.PERIODO || '').slice(0, 7); return !/^\d{4}-\d{2}$/.test(p) || p <= ym; });
+  const grupos = new Map();
+  ks.forEach((k) => {
+    const g = k.CONCEPTO === 'MENSUALIDAD' ? etiquetaServicio(k.PLAN) : nombreCorto(k);
+    if (!grupos.has(g)) grupos.set(g, new Map());
+    const p = String(k.PERIODO || '').slice(0, 7), m = grupos.get(g);
+    m.set(p, r2((m.get(p) || 0) + Number(k.SALDO)));
+  });
+  const nombres = [...grupos.keys()].sort((a, b) => rangoServicio(a) - rangoServicio(b));
+  let lineas = 0;
+  const bloques = nombres.map((g) => '🚨 ' + g + '\n' + [...grupos.get(g)].sort((a, b) => a[0].localeCompare(b[0])).map(([p, monto]) => {
+    lineas++;
+    return '⭕ ' + (/^\d{4}-\d{2}$/.test(p) ? MESES_L[Number(p.slice(5, 7)) - 1] + ' ' + p.slice(0, 4) : g) + '  ' + soles(monto);
+  }).join('\n'));
+  const total = r2(ks.reduce((t, k) => t + Number(k.SALDO), 0));
+  let servs = nombres.filter((g) => ks.some((k) => k.CONCEPTO === 'MENSUALIDAD' && etiquetaServicio(k.PLAN) === g));
+  if (!servs.length) servs = [...new Set(serviciosDe(idCliente).filter((s) => s.ESTADO !== 'Baja').map((s) => etiquetaServicio(s.PLAN)))];
+  const servicio = servs.includes('INTERNET + TV CABLE') || (servs.includes('INTERNET') && servs.includes('TV CABLE')) ? 'INTERNET + TV CABLE' : servs.join(' + ') || 'INTERNET';
+  const dia = Math.min(28, Math.max(1, Number(c.DIA_VENC) || Number(D.config.DiaVenc) || 4));
+  const vence = ks.filter((k) => String(k.PERIODO).slice(0, 7) === ym).map((k) => String(k.VENCE || '').slice(0, 10))
+    .filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v)).sort()[0] || ym + '-' + String(dia).padStart(2, '0');
+  return { detalle: bloques.join('\n\n') + (lineas > 1 ? '\n\n💰 TOTAL ' + soles(total) : ''), servicio, total, vence,
+    suspension: sumarDiasISO(vence, Math.min(60, Math.max(0, Number(D.config.DiasSuspension) || 0))), fpago: ym + '-01',
+    mes: MESES_L[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4), lineas };
+}
 
 /**
  * Reemplaza los marcadores de las plantillas de WhatsApp.
@@ -251,15 +303,30 @@ export function plantilla(clave, idCliente, extra = {}) {
   // un mes con INTERNET y CATV se nombra una sola vez
   const periodos = [...new Set(cargosDe(idCliente).filter((k) => Number(k.DIAS_ATRASO) > 0).map((k) => txtPeriodo(k.PERIODO)))].join(', ');
   const dia = Number(c.DIA_VENC) || cfg.DiaVenc || 4;
-  return String(cfg[clave] || MSG_DEFECTO[clave] || '').replace(/\\n/g, '\n')
-    .replace(/{MES}/g, extra.mes || '').replace(/{MONTO}/g, soles(extra.monto !== undefined ? extra.monto : r.DEUDA_VENCIDA))
-    .replace(/{VENCE}/g, extra.vence ? txtFecha(extra.vence) : 'día ' + dia)
+  const texto = textoPlantilla(clave);
+  // detalle por servicio y fechas del mes del aviso (solo si la plantilla los usa)
+  const det = /{(DETALLE|SERVICIO|FPAGO|SUSPENSION|MES|VENCE)}/.test(texto) ? detalleCobro(idCliente, extra.ym || campanaActual()) : null;
+  // sin un dato de cobro (ej. BCP vacío) se quita su renglón y, si el renglón era solo el dato, también su rótulo ("💳 BCP:")
+  const cuentas = { YAPE: cfg.Yape, BCP: cfg.BCP, BN: cfg.BN, TITULAR: cfg.TitularCobro }, out = [];
+  texto.split('\n').forEach((l) => {
+    const usa = Object.keys(cuentas).filter((k) => l.includes('{' + k + '}'));
+    if (usa.length && usa.every((k) => !String(cuentas[k] || '').trim())) {
+      if (!l.replace(/{[A-Z]+}/g, '').replace(/[\s():·,.-]/g, '') && out.length && /:\s*$/.test(out[out.length - 1])) out.pop();
+      return;
+    }
+    out.push(l);
+  });
+  return out.join('\n')
+    .replace(/{MES}/g, extra.mes || (det ? det.mes : ''))
+    .replace(/{MONTO}/g, soles(extra.monto !== undefined ? extra.monto : det ? det.total : r.DEUDA_VENCIDA))
+    .replace(/{VENCE}/g, extra.vence ? ddmmaaaa(String(extra.vence).slice(0, 10)) : det ? ddmmaaaa(det.vence) : 'día ' + dia)
+    .replace(/{SERVICIO}/g, det ? det.servicio : '').replace(/{DETALLE}/g, det ? det.detalle : '')
+    .replace(/{FPAGO}/g, det ? ddmmaaaa(det.fpago) : '').replace(/{SUSPENSION}/g, det ? ddmmaaaa(det.suspension) : '')
     .replace(/{NOMBRE}/g, c.NOMBRES || '').replace(/{DEUDA}/g, soles(r.DEUDA_VENCIDA)).replace(/{MESES}/g, r.MESES_ADEUDA || 0)
     .replace(/{PERIODOS}/g, periodos || '-').replace(/{DIA}/g, dia).replace(/{YAPE}/g, cfg.Yape || '')
     .replace(/{TITULAR}/g, cfg.TitularCobro || '').replace(/{BCP}/g, cfg.BCP || '').replace(/{BN}/g, cfg.BN || '')
     .replace(/{NEGOCIO}/g, cfg.Negocio || 'D@NDINET')
-    // una cuenta de cobro vacía no deja un renglón suelto ("BCP:" sin número)
-    .split('\n').filter((l) => !/:\s*(\(\s*\))?\s*$/.test(l)).join('\n');
+    .replace(/(^|\n)(👇)(\n👇)+/g, '$1$2');          // si se quitó un bloque, no quedan dos flechas seguidas
 }
 
 export function enlaceWhatsApp(telefono, mensaje) {

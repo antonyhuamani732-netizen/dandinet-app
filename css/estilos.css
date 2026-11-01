@@ -802,6 +802,10 @@ i.punto.e-pend { background: var(--c-neutro); }
 .av-msg summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--c-enlace); font-weight: var(--w-medio); }
 .av-msg .mensaje { white-space: pre-line; padding: var(--e-3); border-radius: var(--r-md); background: var(--c-ok-fondo); color: var(--c-tinta); font-size: var(--t-sm); }
 .av-resultados { display: grid; gap: var(--e-2); }
+.av-paso { display: flex; align-items: center; gap: var(--e-2); margin: var(--e-3) 0 var(--e-2); font-weight: var(--w-medio); }
+.av-paso > span { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--c-ok-solido); color: var(--c-sobre-primario); font-size: var(--t-sm); }
+.av-dos { display: grid; grid-template-columns: 1fr 1fr; gap: var(--e-2); margin: var(--e-2) 0; }
+.av-dos .btn { margin: 0; }
 .av-nav { display: flex; justify-content: space-between; gap: var(--e-2); margin-top: var(--e-3); }
 .av-nav .mini { display: inline-flex; align-items: center; gap: var(--e-1); min-height: 44px; }
 .centro { text-align: center; }

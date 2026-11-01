@@ -8,6 +8,7 @@ import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
   cargosDe, repartir, pppoeDisponibles, plantilla, MSG_DEFECTO, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
   nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas, serviciosDuo, detalleInstalacion,
+  detalleCobro, campanaActual, textoPlantilla,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -32,6 +33,8 @@ async function arrancar() {
   alCambiar(alEventoSync);
   esperarGoogle();
   if (PERFIL && hayDatos) {
+    // un recordatorio quedó abierto en WhatsApp (Android cerró la app): se vuelve a ese cliente
+    if ((await kvGet('avisoAbierto')) && /^(#\/?(inicio)?)?$/.test(location.hash)) location.hash = '#/avisos';
     mostrarApp();
     iniciarAutoSync();
     if (navigator.onLine) sincronizarTodo().catch(manejarErrorSync);
@@ -208,6 +211,7 @@ async function vInicio() {
   const hoyISOv = hoyISO(), deHoy = pendOt.filter((o) => fechaOrden(o) === hoyISOv);
   const riesgo = (D.convenios || []).filter((v) => v.ESTADO === 'VIGENTE' && estadoConvenio(v).riesgo).length;
   const pend = (await pendientesDeEnvio()).length;
+  const avMedias = await kvGet('avisoAbierto');
   const h = new Date().getHours();
   const saludo = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches';
   vista().innerHTML = `
@@ -219,6 +223,7 @@ async function vInicio() {
       { href: '#/cortar', icono: 'cortar', t: 'A cortar', sub: '30 días o más', color: 'rojo', cuenta: aCortar || '', alerta: aCortar > 0 },
       riesgo ? { href: '#/convenios', icono: 'calculadora', t: 'Convenios en riesgo', sub: 'cuotas atrasadas', color: 'ambar', cuenta: riesgo, alerta: true } : null,
       pend ? { href: '#/cola', icono: 'cola', t: 'Por enviar', sub: 'operaciones en cola', color: 'gris', cuenta: pend, alerta: true } : null,
+      avMedias ? { href: '#/avisos', icono: 'chat', t: 'Recordatorio a medias', sub: 'marque si se envió', color: 'verde', cuenta: 1, alerta: true } : null,
     ], 'dos')}
     <section class="cifras" aria-label="Resumen">
       <div><span>Activos</span><b>${n((r) => r.ESTADO === 'Activo' || r.ESTADO === 'Moroso')}</b></div>
@@ -967,8 +972,7 @@ function elegirTelefono(idCliente) {
 async function enviarWhatsApp(idCliente, mensaje) {
   const tel = await elegirTelefono(idCliente);
   if (!tel) return;
-  const url = enlaceWhatsApp(tel, mensaje);
-  if (url) window.open(url, '_blank', 'noopener');
+  abrirWhatsApp(tel, mensaje);
 }
 
 // ---- RECIBO PDF con caché en el celular ---------------------------------------------------
@@ -1719,19 +1723,26 @@ const AV_RES = {
   ENVIADO: ['Enviados', 'verde', 'check'], SIN_WHATSAPP: ['Sin WhatsApp', 'ambar', 'alerta'], OMITIDO: ['Saltados', 'gris', 'flecha'],
   NO_ENVIAR: ['No desean mensajes', 'rojo', 'cerrar'],
 };
-const AYUDA_MASIVO = 'La app prepara la lista y el mensaje de cada cliente. Usted toca "Abrir WhatsApp", revisa y toca ENVIAR en WhatsApp. Al volver, marque qué pasó.\n\n' +
-  'Para que WhatsApp no bloquee su número:\n• Se envía uno por uno, a mano (nada automático).\n• Hay un límite por día en este celular (cámbielo abajo; recomendado 30–40).\n' +
-  '• Después de cada envío hay una pausa corta.\n• Cada mensaje lleva el nombre y monto del cliente y el saludo cambia.\n• Sin enlaces en el mensaje.\n' +
-  '• Si alguien pide no recibir mensajes, márquelo: nunca más se le ofrecerá.\n• Pida a los clientes que guarden su número: así WhatsApp lo ve como contacto conocido.\n\n' +
+const AYUDA_MASIVO = 'Cómo se usa:\n1. Toque "Abrir WhatsApp": se abre el chat del cliente con el mensaje ya escrito.\n2. En WhatsApp toque ENVIAR y vuelva a la app.\n3. Toque "Sí, lo envié". La app pasa sola al siguiente cliente.\n\n' +
+  'Si la app se cierra mientras está en WhatsApp, al abrirla vuelve a ese mismo cliente y le pregunta si se envió: no se pierde ni se cuenta dos veces.\n\n' +
+  'Para que WhatsApp no bloquee su número:\n• Uno por uno, a mano (nada automático).\n• Límite por día en este celular (recomendado 30–40), en "Filtros y límite".\n• Sin enlaces en el mensaje.\n' +
+  '• Si alguien pide no recibir mensajes, márquelo: no se le volverá a ofrecer.\n• Pida a los clientes que guarden su número.\n\n' +
+  'Reenviar: en el Reporte toque "Reenviar" junto al cliente. "Otro número" envía el mismo mensaje a un familiar o a quien paga (no se guarda en la ficha).\n\n' +
   'Nadie recibe dos veces el mismo recordatorio: lo que marcan todos los técnicos se junta al sincronizar.';
 const SALUDOS = ['Hola', 'Buen día', 'Saludos', 'Hola, buen día', 'Estimado(a)'];
-/** Cambia el saludo inicial según el cliente (mensajes no idénticos). */
+/** Cambia el saludo inicial según el cliente (mensajes no idénticos), si la plantilla empieza con "Hola". */
 const variarSaludo = (msg, n) => String(msg).replace(/^Hola\b/, SALUDOS[n % SALUDOS.length]);
 const mesTxt = (ym) => MESES_LARGO[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4);
-const ymMas = (ym, n) => { const d = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1 + n, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
 /** Mes que se recuerda: desde el día 20, el mes siguiente. */
-const mesCampana = () => { const h = hoyISO(); return Number(h.slice(8, 10)) >= 20 ? ymMas(h.slice(0, 7), 1) : h.slice(0, 7); };
+const mesCampana = campanaActual;
 const telefonosOk = (c) => [c.TELEFONO, c.TELEFONO2].map((t) => String(t || '').replace(/\D/g, '').slice(-9)).filter((t) => /^9\d{8}$/.test(t));
+/** Día (aaaa-mm-dd, hora de Lima) de una fecha guardada: el servidor la manda en UTC y el celular con -05:00. */
+const diaLima = (v) => {
+  const t = String(v || '');
+  if (!/[zZ]$|[+-]\d{2}:?\d{2}$/.test(t)) return t.slice(0, 10);
+  const d = new Date(t);
+  return isNaN(d) ? t.slice(0, 10) : d.toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+};
 /** Clientes que no quieren mensajes (la última marca de cada uno manda). */
 function noDesean() {
   const ult = {};
@@ -1747,108 +1758,162 @@ function resultadosCampana(camp) {
   return r;
 }
 /**
- * A quién se le puede avisar en el mes ym: servicio activo/moroso con cuota de ese mes por pagar (o deuda vencida),
- * con celular válido. Al día → recordatorio; con deuda vencida → mensaje de cobranza.
+ * A quién se le puede avisar en el mes ym: servicio activo/moroso con algo por pagar hasta ese mes
+ * (la cuota del mes aunque aún no venza, y la deuda vencida). Al día → recordatorio; con deuda → cobranza.
  */
 function candidatosAviso(ym) {
   const no = noDesean(), lista = [];
   D.clientes.forEach((c) => {
     const r = D.resumen[c.ID_CLIENTE] || {};
     if (!['Activo', 'Moroso'].includes(r.ESTADO) || no.has(c.ID_CLIENTE)) return;
-    const tels = telefonosOk(c);
-    const delMes = cargosDe(c.ID_CLIENTE).filter((k) => String(k.PERIODO).slice(0, 7) === ym);
-    const saldoMes = r2(delMes.reduce((t, k) => t + Number(k.SALDO), 0)), deuda = Number(r.DEUDA_VENCIDA) || 0;
-    if (saldoMes <= 0 && deuda <= 0) return;
-    const vence = delMes.map((k) => String(k.VENCE || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
-    lista.push({ c, r, tels, tipo: deuda > 0 ? 'COBRANZA' : 'RECORDATORIO', saldoMes, deuda, vence, monto: r2(deuda > 0 ? deuda : saldoMes) });
+    const det = detalleCobro(c.ID_CLIENTE, ym);
+    if (det.total <= 0) return;
+    const deuda = Number(r.DEUDA_VENCIDA) || 0;
+    lista.push({ c, r, tels: telefonosOk(c), tipo: deuda > 0 ? 'COBRANZA' : 'RECORDATORIO', deuda, det, monto: det.total });
   });
   return lista.sort((a, b) => String(a.c.ZONA).localeCompare(String(b.c.ZONA)) || String(a.c.NOMBRES).localeCompare(String(b.c.NOMBRES)));
+}
+
+/**
+ * Abre el chat de WhatsApp con el mensaje escrito. En Android va directo a la aplicación (sin preguntar
+ * "navegador o WhatsApp"); si el celular tiene WhatsApp y WhatsApp Business, Android deja elegir cuál.
+ * Si no hay ninguna instalada, abre la página de WhatsApp. En la PC abre WhatsApp Web.
+ */
+function abrirWhatsApp(telefono, mensaje) {
+  let t = String(telefono || '').replace(/\D/g, '');
+  if (t.length === 9) t = '51' + t;
+  if (t.length < 11) { aviso('Número de celular inválido.', 'error'); return false; }
+  const txt = encodeURIComponent(mensaje), web = `https://wa.me/${t}?text=${txt}`, ua = navigator.userAgent;
+  if (/Android/i.test(ua)) location.href = `intent://send/?phone=${t}&text=${txt}#Intent;scheme=whatsapp;S.browser_fallback_url=${encodeURIComponent(web)};end`;
+  else if (/iPhone|iPad|iPod/i.test(ua)) location.href = `whatsapp://send?phone=${t}&text=${txt}`;
+  else window.open(web, '_blank', 'noopener');
+  return true;
 }
 
 async function vAvisos(arg) {
   if (arg === 'reporte' || /^reporte:/.test(arg || '')) return vReporteAvisos(String(arg).split(':')[1]);
   const ym = mesCampana(), camp = ym;
-  const cand = candidatosAviso(ym), hechos = resultadosCampana(camp);
+  const cand = candidatosAviso(ym);
+  // reenvío elegido por el técnico (desde el reporte): el cliente aparece aunque ya tenga resultado
+  let forzado = /^reenviar:/.test(arg || '') ? String(arg).slice(9) : null;
+  const itemDe = (id) => cand.find((z) => z.c.ID_CLIENTE === id) || (() => { const c = D.porId[id]; if (!c) return null;
+    const r = D.resumen[id] || {}, det = detalleCobro(id, ym), deuda = Number(r.DEUDA_VENCIDA) || 0;
+    return { c, r, tels: telefonosOk(c), tipo: deuda > 0 ? 'COBRANZA' : 'RECORDATORIO', deuda, det, monto: det.total }; })();
   const f = Object.assign({ zona: '', tipos: { RECORDATORIO: true, COBRANZA: true }, limite: 40, saltados: false }, (await kvGet('avisosFiltro')) || {});
   const yo = PERFIL.email, hoy = hoyISO();
-  const enviadosHoy = () => (D.avisos || []).filter((a) => a.RESULTADO === 'ENVIADO' && String(a.FECHA).slice(0, 10) === hoy && (!a.USUARIO || a.USUARIO === yo)).length;
+  // cada mensaje real cuenta UNA vez (por su ID de marca), aunque la app se reinicie o los datos tarden en bajar;
+  // un reenvío o un envío a otro número es otro mensaje y sí suma
+  const enviadosHoy = () => new Set((D.avisos || []).filter((a) => a.RESULTADO === 'ENVIADO' && diaLima(a.FECHA) === hoy &&
+    (!a.USUARIO || a.USUARIO === yo)).map((a) => a.ID_SOLICITUD || a.ID_AVISO)).size;
   const zonas = [...new Set(cand.map((x) => x.c.ZONA).filter(Boolean))].sort();
-  const pendientes = () => cand.filter((x) => { const h = resultadosCampana(camp)[x.c.ID_CLIENTE];
-    return (!h || (f.saltados && h.RESULTADO === 'OMITIDO')) && f.tipos[x.tipo] && (!f.zona || x.c.ZONA === f.zona); });
+  const pendientes = () => { const h = resultadosCampana(camp);
+    return cand.filter((x) => { const r = h[x.c.ID_CLIENTE];
+      return (!r || (f.saltados && r.RESULTADO === 'OMITIDO')) && f.tipos[x.tipo] && (!f.zona || x.c.ZONA === f.zona); }); };
   const sinCel = cand.filter((x) => !x.tels.length).length;
-  vista().innerHTML = `<section class="form"><h2 class="tit-ic">${ic('chat')}Recordatorio masivo ${ayuda('Cómo se envía sin arriesgar el número', AYUDA_MASIVO)}</h2>
+  // cliente que quedó abierto en WhatsApp: si Android cerró la app, al volver se sigue con él
+  let enCurso = await kvGet('avisoAbierto');
+  if (enCurso && (enCurso.camp !== camp || !itemDe(enCurso.id) ||
+      (!enCurso.reenvio && resultadosCampana(camp)[enCurso.id]) || (enCurso.reenvio && (D.avisos || []).some((a) => a.ID_SOLICITUD && a.ID_SOLICITUD === enCurso.marca)))) {
+    enCurso = null; await kvSet('avisoAbierto', null);
+  }
+  if (enCurso) forzado = enCurso.reenvio ? enCurso.id : forzado;
+  if (forzado && !itemDe(forzado)) forzado = null;
+  let actual = enCurso ? enCurso.id : forzado, abierto = !!enCurso, tel = enCurso ? enCurso.tel : '', volvio = !!enCurso, ocupado = false;
+  let otroTel = enCurso && enCurso.otro ? enCurso.tel : '';   // número escrito a mano (familiar, quien paga…)
+  const filtros = `<div class="chips-mapa" role="group" aria-label="Tipo de mensaje">
+      <button type="button" class="chip-mapa c-verde ${f.tipos.RECORDATORIO ? 'sel' : ''}" data-tipo="RECORDATORIO" aria-pressed="${!!f.tipos.RECORDATORIO}"><span class="mk mk-verde">${ic('check')}</span>Al día</button>
+      <button type="button" class="chip-mapa c-ambar ${f.tipos.COBRANZA ? 'sel' : ''}" data-tipo="COBRANZA" aria-pressed="${!!f.tipos.COBRANZA}"><span class="mk mk-ambar">${ic('alerta')}</span>Con deuda</button></div>
+    <label class="fila-zona">Zona<select id="avZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === f.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
+    <label class="fila-zona">Límite por día en este celular<input id="avLim" type="number" min="5" max="80" step="5" value="${Number(f.limite) || 40}" inputmode="numeric"></label>
+    <label class="check"><input type="checkbox" id="avSalt" ${f.saltados ? 'checked' : ''}> Volver a mostrar los que salté</label>
+    ${sinCel ? `<p class="sub">${sinCel} cliente(s) sin un celular válido: no aparecen (corríjalo en su ficha).</p>` : ''}`;
+  vista().innerHTML = `<section class="form"><h2 class="tit-ic">${ic('chat')}Recordatorio masivo ${ayuda('Cómo se usa', AYUDA_MASIVO)}</h2>
     ${!D.config.Yape && !D.config.BCP && !D.config.BN ? `<p class="aviso error">${ic('alerta')}<span>Faltan las cuentas de cobro (Yape, BCP, B. Nación): el mensaje saldría sin ellas. <a href="#/negocio/cobro">Completarlas</a>.</span></p>` : ''}
-    <p class="globo">${ic('calendario')}<span>Pago de <b>${esc(mesTxt(ym))}</b> · campaña ${esc(camp)}. Ya marcados: <b>${Object.keys(hechos).length}</b>.</span></p>
-    <div class="tarjeta-form"><h3 class="tit-ic">${ic('buscar')}A quiénes</h3>
-      <div class="chips-mapa" role="group" aria-label="Tipo de mensaje">
-        <button type="button" class="chip-mapa c-verde ${f.tipos.RECORDATORIO ? 'sel' : ''}" data-tipo="RECORDATORIO" aria-pressed="${!!f.tipos.RECORDATORIO}"><span class="mk mk-verde">${ic('check')}</span>Al día · recordatorio</button>
-        <button type="button" class="chip-mapa c-ambar ${f.tipos.COBRANZA ? 'sel' : ''}" data-tipo="COBRANZA" aria-pressed="${!!f.tipos.COBRANZA}"><span class="mk mk-ambar">${ic('alerta')}</span>Con deuda · cobranza</button></div>
-      <label class="fila-zona">Zona<select id="avZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === f.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
-      <label class="check"><input type="checkbox" id="avSalt" ${f.saltados ? 'checked' : ''}> Volver a mostrar los que salté</label>
-      <label class="fila-zona">Límite por día en este celular<input id="avLim" type="number" min="5" max="80" step="5" value="${Number(f.limite) || 40}" inputmode="numeric"></label>
-      ${sinCel ? `<p class="sub">${sinCel} cliente(s) no tienen un celular válido: se saltan solos (corríjalo en su ficha).</p>` : ''}</div>
     <div id="avCaja"></div>
-    <a class="btn secundario" href="#/avisos/reporte">${ic('lista')}Ver reporte de enviados</a>
-    <a class="btn secundario" href="#/negocio/mensajes">${ic('editar')}Cambiar el texto de los mensajes</a></section>`;
+    ${seccion('avFiltros', 'Filtros y límite por día', filtros)}
+    <div class="botones"><a class="btn secundario" href="#/avisos/reporte">${ic('lista')}Reporte</a><a class="btn secundario" href="#/negocio/mensajes">${ic('editar')}Texto</a></div></section>`;
+  prepararSecciones(vista());
   const guardarF = () => kvSet('avisosFiltro', f);
   vista().querySelectorAll('[data-tipo]').forEach((b) => { b.onclick = () => { f.tipos[b.dataset.tipo] = !f.tipos[b.dataset.tipo];
-    b.classList.toggle('sel', f.tipos[b.dataset.tipo]); b.setAttribute('aria-pressed', f.tipos[b.dataset.tipo]); guardarF(); i = 0; pintar(); }; });
-  $('#avZona').onchange = () => { f.zona = $('#avZona').value; guardarF(); i = 0; pintar(); };
-  $('#avSalt').onchange = () => { f.saltados = $('#avSalt').checked; guardarF(); i = 0; pintar(); };
+    b.classList.toggle('sel', f.tipos[b.dataset.tipo]); b.setAttribute('aria-pressed', f.tipos[b.dataset.tipo]); guardarF(); pintar(); }; });
+  $('#avZona').onchange = () => { f.zona = $('#avZona').value; guardarF(); pintar(); };
+  $('#avSalt').onchange = () => { f.saltados = $('#avSalt').checked; guardarF(); pintar(); };
   $('#avLim').onchange = () => { f.limite = Math.min(80, Math.max(5, Number($('#avLim').value) || 40)); $('#avLim').value = f.limite; guardarF(); pintar(); };
-  let i = 0, abierto = false, espera = 0, reloj = null, tel = '';
+  // id de la marca del reenvío: si la app se reinicia, se sabe si ya se anotó (y no se cuenta dos veces)
+  let marcaReenvio = (enCurso && enCurso.marca) || crypto.randomUUID();
   function pintar() {
-    clearInterval(reloj);
-    const lista = pendientes().filter((x) => x.tels.length), env = enviadosHoy(), lim = Number(f.limite) || 40;
     const caja = $('#avCaja');
     if (!caja) return;
-    if (!lista.length) { caja.innerHTML = `<div class="tarjeta-form centro"><span class="mk mk-verde grande">${ic('check')}</span><p><b>No queda nadie por avisar</b> con estos filtros.</p></div>`; return; }
-    if (i >= lista.length) i = 0;
+    const lista = pendientes().filter((x) => x.tels.length);
+    const previo = (id) => resultadosCampana(camp)[id];
+    // el cliente abierto en WhatsApp (o el elegido para reenviar) sigue en pantalla aunque cambien los filtros
+    if (forzado && actual !== forzado && !abierto) actual = forzado;
+    if ((abierto || forzado) && actual && !lista.some((x) => x.c.ID_CLIENTE === actual)) { const y = itemDe(actual); if (y) lista.unshift(y); }
+    const env = enviadosHoy(), lim = Number(f.limite) || 40, tope = env >= lim;
+    const cab = `<div class="av-progreso"><span>Pago de <b>${esc(mesTxt(ym))}</b> · <b>${lista.length}</b> por avisar</span><span class="${tope ? 'error' : ''}">Hoy <b>${env}</b> de ${lim}</span></div>
+      <div class="barra"><i class="${tope ? 'peligro' : ''}" style="width:${Math.min(100, Math.round(env / lim * 100))}%"></i></div>`;
+    if (!lista.length) { caja.innerHTML = cab + `<div class="tarjeta-form centro"><span class="mk mk-verde grande">${ic('check')}</span><p><b>No queda nadie por avisar</b> con estos filtros.</p></div>`; return; }
+    let i = lista.findIndex((x) => x.c.ID_CLIENTE === actual);
+    if (i < 0) i = 0;
     const x = lista[i], c = x.c;
-    tel = x.tels.includes(tel) ? tel : x.tels[0];
-    const extra = { mes: mesTxt(ym), monto: x.tipo === 'COBRANZA' ? x.deuda : x.saldoMes, vence: x.vence };
-    const msg = variarSaludo(plantilla(x.tipo === 'COBRANZA' ? 'MsgCobranza' : 'MsgRecordatorio', c.ID_CLIENTE, extra), Number(String(c.ID_CLIENTE).replace(/\D/g, '')) || i);
-    const tope = env >= lim;
-    caja.innerHTML = `<div class="av-progreso"><span><b>${lista.length}</b> por avisar</span><span class="${tope ? 'error' : ''}">Hoy: <b>${env}</b> de ${lim}</span></div>
-      <div class="barra"><i class="${tope ? 'peligro' : ''}" style="width:${Math.min(100, Math.round(env / lim * 100))}%"></i></div>
-      <div class="tarjeta-form av-tarjeta">
+    actual = c.ID_CLIENTE;
+    const tels = otroTel ? x.tels.concat(x.tels.includes(otroTel) ? [] : [otroTel]) : x.tels;
+    if (!tels.includes(tel)) tel = tels[0] || '';
+    const ant = forzado === c.ID_CLIENTE ? previo(c.ID_CLIENTE) : null;
+    const msg = variarSaludo(plantilla('MsgRecordatorio', c.ID_CLIENTE, { ym, monto: x.monto }), Number(String(c.ID_CLIENTE).replace(/\D/g, '')) || i);
+    caja.innerHTML = cab + `<div class="tarjeta-form av-tarjeta">
         <div class="av-cab"><span class="mk mk-${x.tipo === 'COBRANZA' ? 'ambar' : 'verde'}">${ic(x.tipo === 'COBRANZA' ? 'alerta' : 'check')}</span>
           <div><b>${esc(c.NOMBRES)}</b><small>${esc(c.ID_CLIENTE)} · ${esc(c.ZONA || 'sin zona')}</small>
-          <small>${x.tipo === 'COBRANZA' ? `Debe <b>${soles(x.deuda)}</b> (${esc(x.r.MESES_ADEUDA || 0)} mes/es)` : `Paga <b>${soles(x.saldoMes)}</b>${x.vence ? ' · vence ' + esc(txtFecha(x.vence)) : ''}`}</small></div></div>
-        ${x.tels.length > 1 ? `<div class="chips-mapa">${x.tels.map((t) => `<button type="button" class="mini ${t === tel ? 'sel' : ''}" data-tel="${t}" aria-pressed="${t === tel}">${ic('celular')}${t}</button>`).join('')}</div>` : `<p class="sub etq-ic">${ic('celular')}${esc(tel)}</p>`}
+          <small>${esc(x.det.servicio)} · <b>${soles(x.monto)}</b>${x.deuda > 0 ? ` · debe ${esc(x.r.MESES_ADEUDA || 0)} mes/es` : ` · vence ${esc(txtFecha(x.det.vence))}`}</small></div></div>
+        ${ant ? `<p class="globo">${ic('info')}<span><b>Reenvío.</b> Ya tenía "${esc({ ENVIADO: 'Enviado', SIN_WHATSAPP: 'Sin WhatsApp', OMITIDO: 'Saltado' }[ant.RESULTADO] || ant.RESULTADO)}"${ant.FECHA ? ' el ' + esc(txtFecha(diaLima(ant.FECHA))) : ''}.</span></p>` : ''}
+        <div class="chips-mapa">${tels.map((t) => `<button type="button" class="mini ${t === tel ? 'sel' : ''}" data-tel="${t}" aria-pressed="${t === tel}" ${abierto ? 'disabled' : ''}>${ic('celular')}${t}${t === otroTel ? ' (otro)' : ''}</button>`).join('')}
+          ${abierto ? '' : `<button type="button" class="mini" id="avOtroNum">${ic('agregar')}Otro número</button>`}</div>
         <details class="av-msg"><summary>Ver el mensaje</summary><p class="mensaje">${esc(msg)}</p></details>
-        ${tope ? `<p class="aviso error">${ic('alerta')}<span>Llegó al límite de hoy en este celular. Para cuidar su número, siga mañana (o súbalo con cuidado arriba).</span></p>`
-          : !abierto ? `<button class="btn grande verde" id="avAbrir" ${espera ? 'disabled' : ''}>${ic('chat')}${espera ? `Espere ${espera} s…` : 'Abrir WhatsApp'}</button>
-            ${espera ? `<p class="sub centro">Pausa entre mensajes para que WhatsApp no lo vea como envío masivo.</p>` : ''}`
-          : `<p class="globo">${ic('info')}<span>¿Qué pasó en WhatsApp?</span></p>
-            <div class="av-resultados">
-              <button class="btn verde" data-res="ENVIADO">${ic('check')}Lo envié</button>
-              <button class="btn" data-res="SIN_WHATSAPP">${ic('alerta')}No tiene WhatsApp</button>
-              <button class="btn" data-res="NO_ENVIAR">${ic('cerrar')}No desea mensajes</button>
-              <button class="btn secundario" id="avOtra">${ic('chat')}Abrir otra vez</button></div>`}
-        <div class="av-nav"><button class="mini" id="avAnt" ${i ? '' : 'disabled'}>${ic('atras')}Anterior</button>
+        ${abierto ? `<p class="av-paso"><span>2</span>${volvio ? 'Volvió de WhatsApp. ' : ''}¿Se envió el mensaje?</p>
+            <button class="btn grande verde" data-res="ENVIADO">${ic('check')}Sí, lo envié</button>
+            <div class="av-dos"><button class="btn" data-res="SIN_WHATSAPP">${ic('alerta')}No tiene WhatsApp</button>
+              <button class="btn" data-res="NO_ENVIAR">${ic('cerrar')}No desea mensajes</button></div>
+            <button class="btn secundario" id="avOtra">${ic('chat')}No se abrió: abrir otra vez</button>`
+          : tope ? `<p class="aviso error">${ic('alerta')}<span>Llegó al límite de hoy en este celular. Para cuidar su número, siga mañana (o súbalo con cuidado en "Filtros y límite").</span></p>`
+          : `<p class="av-paso"><span>1</span>Abra WhatsApp y toque <b>ENVIAR</b></p>
+            <button class="btn grande verde" id="avAbrir">${ic('chat')}Abrir WhatsApp</button>`}
+        <div class="av-nav"><button class="mini" id="avAnt" ${i && !abierto ? '' : 'disabled'}>${ic('atras')}Anterior</button>
           <button class="mini" data-res="OMITIDO">Saltar${ic('flecha')}</button></div></div>`;
     caja.querySelectorAll('[data-tel]').forEach((b) => { b.onclick = () => { tel = b.dataset.tel; pintar(); }; });
     const abrir = () => {
-      if (/https?:\/\//i.test(msg) && !abierto) aviso('El mensaje tiene un enlace: WhatsApp revisa más los mensajes con enlaces.', 'error');
-      const url = enlaceWhatsApp(tel, msg);
-      if (!url) return aviso('Número de celular inválido.', 'error');
-      abierto = true; window.open(url, '_blank', 'noopener'); pintar();
+      if (/https?:\/\//i.test(msg)) aviso('El mensaje tiene un enlace: WhatsApp revisa más los mensajes con enlaces.', 'error');
+      if (!abrirWhatsApp(tel, msg)) return;           // primero (necesita el toque del técnico), luego se anota
+      kvSet('avisoAbierto', { camp, id: c.ID_CLIENTE, tel, otro: tel === otroTel, reenvio: forzado === c.ID_CLIENTE, marca: marcaReenvio });
+      abierto = true; volvio = false; pintar();
+    };
+    if ($('#avOtroNum')) $('#avOtroNum').onclick = async () => {
+      const n = String((await pedirTexto('Celular de 9 dígitos (familiar, quien paga, etc.). No se guarda en la ficha: solo para este envío.',
+        { titulo: 'Enviar a otro número', valor: otroTel, si: 'Usar este número' })) || '').replace(/\D/g, '').slice(-9);
+      if (!n) return;
+      if (!/^9\d{8}$/.test(n)) return aviso('Celular: 9 dígitos que empiecen con 9.', 'error');
+      otroTel = n; tel = n; pintar();
     };
     if ($('#avAbrir')) $('#avAbrir').onclick = abrir;
     if ($('#avOtra')) $('#avOtra').onclick = abrir;
-    if ($('#avAnt')) $('#avAnt').onclick = () => { i = Math.max(0, i - 1); abierto = false; pintar(); };
+    if ($('#avAnt')) $('#avAnt').onclick = () => { forzado = null; otroTel = ''; actual = lista[Math.max(0, i - 1)].c.ID_CLIENTE; tel = ''; pintar(); };
     caja.querySelectorAll('[data-res]').forEach((b) => { b.onclick = async () => {
+      if (ocupado) return;                              // un doble toque no registra dos veces
       const res = b.dataset.res;
       if (res === 'NO_ENVIAR' && !(await confirmar(`${c.NOMBRES} no recibirá más recordatorios por WhatsApp (se puede quitar la marca en el reporte).`, { titulo: '¿No desea mensajes?', si: 'Marcar' }))) return;
-      await encolar({ tipo: 'REGISTRAR_AVISO', idCliente: c.ID_CLIENTE, usuarioLocal: yo,
-        motivo: res === 'OMITIDO' && abierto ? 'Abrió WhatsApp y lo saltó' : '',
-        datos: { resultado: res, tipo: x.tipo, campana: camp, telefono: tel, monto: extra.monto } });
-      abierto = false; tel = '';
-      if (res === 'ENVIADO') { espera = 15 + Math.floor(Math.random() * 16); reloj = null; }
-      pintar();
-      if (espera) reloj = setInterval(() => { espera--; const btn = $('#avAbrir'); if (!btn) { clearInterval(reloj); espera = 0; return; }
-        if (espera <= 0) { clearInterval(reloj); espera = 0; pintar(); } else btn.innerHTML = `${ic('chat')}Espere ${espera} s…`; }, 1000);
+      ocupado = true;
+      caja.querySelectorAll('button').forEach((y) => { y.disabled = true; });
+      const fueForzado = forzado === c.ID_CLIENTE;
+      const sig = fueForzado ? null : lista[i + 1] ? lista[i + 1].c.ID_CLIENTE : null;
+      try {
+        await encolar({ idSolicitud: fueForzado ? marcaReenvio : undefined, tipo: 'REGISTRAR_AVISO', idCliente: c.ID_CLIENTE, usuarioLocal: yo,
+          motivo: [res === 'OMITIDO' && abierto ? 'Abrió WhatsApp y lo saltó' : '', fueForzado ? 'Reenvío' : '', tel === otroTel ? 'A otro número' : ''].filter(Boolean).join(' · '),
+          datos: { resultado: res, tipo: x.tipo, campana: camp, telefono: tel, monto: x.monto } });
+        await kvSet('avisoAbierto', null);
+        if (fueForzado) { forzado = null; marcaReenvio = crypto.randomUUID(); if (location.hash !== '#/avisos') history.replaceState(null, '', '#/avisos'); }
+        abierto = false; volvio = false; tel = ''; otroTel = ''; actual = sig;
+        if (res === 'ENVIADO') aviso(`Anotado: ${c.NOMBRES}. Sigue el próximo.`);
+      } catch (e) { aviso('No se pudo anotar: ' + e.message, 'error'); }
+      ocupado = false; pintar();
     }; });
   }
   pintar();
@@ -1883,8 +1948,10 @@ async function vReporteAvisos(campSel) {
     $('#rpLista').innerHTML = lista.map((a) => `<li><a href="#/cliente/${esc(a.ID_CLIENTE)}"><div><b>${esc(a.CLIENTE || a.ID_CLIENTE)}</b>
       <small>${esc(a.ID_CLIENTE)} · ${esc(a.ZONA || 'sin zona')}${a.FECHA ? ' · ' + esc(txtFecha(a.FECHA)) + ' ' + esc((String(a.FECHA).slice(10).match(/\d{2}:\d{2}/) || [''])[0]) : ''}${a.USUARIO ? ' · ' + esc(String(a.USUARIO).replace(/@.*/, '')) : ''}</small>
       ${a.OBS ? `<small>${esc(a.OBS)}</small>` : ''}</div><div class="der">${Number(a.MONTO) ? `<b>${soles(a.MONTO)}</b>` : ''}${marcaPend(a)}
-      ${filtro.res === 'NO_ENVIAR' ? `<button class="mini no-imprimir" data-quitar="${esc(a.ID_CLIENTE)}">Quitar marca</button>` : ''}</div></a></li>`).join('')
+      ${filtro.res === 'NO_ENVIAR' ? `<button class="mini no-imprimir" data-quitar="${esc(a.ID_CLIENTE)}">Quitar marca</button>`
+        : camp === mesCampana() ? `<button class="mini no-imprimir" data-reenviar="${esc(a.ID_CLIENTE)}">${ic('chat')}Reenviar</button>` : ''}</div></a></li>`).join('')
       || '<li class="vacio">Nadie en este grupo.</li>';
+    $('#rpLista').querySelectorAll('[data-reenviar]').forEach((b) => { b.onclick = (e) => { e.preventDefault(); location.hash = '#/avisos/reenviar:' + b.dataset.reenviar; }; });
     $('#rpLista').querySelectorAll('[data-quitar]').forEach((b) => { b.onclick = async (e) => {
       e.preventDefault();
       if (!(await confirmar('Volverá a aparecer en el recordatorio masivo.', { titulo: '¿Quitar "no desea mensajes"?', si: 'Quitar marca' }))) return;
@@ -3601,12 +3668,14 @@ const CAMPOS_COBRO = [['Yape', 'N° Yape', 'numeric'], ['TitularCobro', 'Titular
 const MENSAJES = [
   ['MsgRecordatorio', 'Recordatorio antes del vencimiento (WhatsApp)'], ['MsgCobranza', 'Cobranza a quien debe (WhatsApp)'], ['MsgCorte', 'Aviso de corte (WhatsApp)'], ['MensajeRecibo', 'Mensaje al pie del recibo'],
 ];
-const VARIABLES = [['{NOMBRE}', 'nombre'], ['{DEUDA}', 'deuda'], ['{MESES}', 'meses'], ['{PERIODOS}', 'meses que debe'], ['{DIA}', 'día de pago'],
+const CAMPOS_MSG = [['DiasSuspension', 'Días entre el vencimiento y la suspensión (0 = el mismo día)', 'numeric']];
+const VARIABLES = [['{DETALLE}', 'meses y montos por servicio (INTERNET / TV CABLE)'], ['{SERVICIO}', 'INTERNET, TV CABLE o INTERNET + TV CABLE'],
+  ['{FPAGO}', 'fecha de pago (día 1)'], ['{SUSPENSION}', 'fecha de suspensión'], ['{NOMBRE}', 'nombre'], ['{DEUDA}', 'deuda'], ['{MESES}', 'meses'], ['{PERIODOS}', 'meses que debe'], ['{DIA}', 'día de pago'],
   ['{YAPE}', 'Yape'], ['{TITULAR}', 'titular'], ['{BCP}', 'BCP'], ['{BN}', 'B. Nación'], ['{NEGOCIO}', 'negocio'],
-  ['{MES}', 'mes del pago (recordatorio)'], ['{MONTO}', 'monto del mes (recordatorio)'], ['{VENCE}', 'fecha de vencimiento (recordatorio)']];
+  ['{MES}', 'mes del pago (recordatorio)'], ['{MONTO}', 'total a pagar (recordatorio)'], ['{VENCE}', 'fecha de vencimiento (recordatorio)']];
 
 function vNegocio(sec) {
-  const cfg = D.config, txt = (k) => String(cfg[k] || MSG_DEFECTO[k] || '').replace(/\\n/g, '\n');
+  const cfg = D.config, txt = (k) => textoPlantilla(k);
   const campo = ([k, etq, tipo]) => `<label>${esc(etq)}<input data-k="${k}" value="${esc(txt(k))}" ${tipo === 'numeric' ? 'inputmode="numeric"' : tipo === 'email' ? 'type="email"' : ''} autocomplete="off"></label>`;
   // cliente de ejemplo para la vista previa: el primero con deuda
   const ej = Object.values(D.resumen).find((r) => Number(r.DEUDA_VENCIDA) > 0) || Object.values(D.resumen)[0] || {};
@@ -3621,6 +3690,7 @@ function vNegocio(sec) {
     ${ver('cobro') ? `<div class="tarjeta-form cuentas-cobro">${CAMPOS_COBRO.map((x) => `<div class="cuenta-banco">${/yape/i.test(x[0]) ? '<img src="icons/bancos/yape-ico.png" alt="" width="40" height="40">'
       : x[0] === 'BCP' ? '<img src="icons/bancos/bcp-ico.png" alt="" width="40" height="40">' : x[0] === 'BN' ? '<img src="icons/bancos/bn-ico.png" alt="" width="40" height="40">'
       : `<span class="ico-metodo">${ic('usuario')}</span>`}${campo(x)}</div>`).join('')}</div>` : ''}
+    ${ver('mensajes') ? `<div class="tarjeta-form">${CAMPOS_MSG.map(campo).join('')}</div>` : ''}
     ${!ver('mensajes') ? '' : MENSAJES.map(([k, etq]) => `<label>${esc(etq)}<textarea data-k="${k}" rows="${k === 'MensajeRecibo' ? 2 : 7}">${esc(txt(k))}</textarea></label>
       ${k !== 'MensajeRecibo' ? `<div class="chips vars">${VARIABLES.map(([v, d]) => `<button type="button" class="mini" data-var="${v}" data-para="${k}" title="${esc(d)}">${v}</button>`).join('')}</div>
       <details class="previa"><summary>Vista previa con ${esc(ej.NOMBRES || 'un cliente')}</summary><pre data-previa="${k}"></pre></details>` : ''}`).join('')}
@@ -3629,7 +3699,7 @@ function vNegocio(sec) {
   const valor = (k) => (vista().querySelector(`[data-k="${k}"]`) || {}).value || '';
   const previa = () => vista().querySelectorAll('[data-previa]').forEach((pre) => {
     const k = pre.dataset.previa, guard = cfg[k];
-    const temp = Object.assign({}, cfg); CAMPOS_COBRO.concat(CAMPOS_NEGOCIO).forEach(([c]) => { temp[c] = valor(c); });
+    const temp = Object.assign({}, cfg); CAMPOS_COBRO.concat(CAMPOS_NEGOCIO, CAMPOS_MSG).forEach(([c]) => { if (vista().querySelector(`[data-k="${c}"]`)) temp[c] = valor(c); });
     D.config = Object.assign({}, temp, { [k]: valor(k) });
     pre.textContent = plantilla(k, ej.ID_CLIENTE);
     D.config = cfg; cfg[k] = guard;
@@ -3644,12 +3714,13 @@ function vNegocio(sec) {
   $('#ok').onclick = async () => {
     const valores = {};
     // solo los campos de la sección abierta (los que no están en pantalla no se tocan)
-    CAMPOS_NEGOCIO.concat(CAMPOS_COBRO).concat(MENSAJES).forEach(([k]) => { if (!vista().querySelector(`[data-k="${k}"]`)) return;
+    CAMPOS_NEGOCIO.concat(CAMPOS_COBRO, CAMPOS_MSG).concat(MENSAJES).forEach(([k]) => { if (!vista().querySelector(`[data-k="${k}"]`)) return;
       const v = valor(k).trim(); if (v !== txt(k).trim()) valores[k] = v; });
     if (!Object.keys(valores).length) return aviso('No hay cambios.');
     // mismas validaciones que el servidor
     if ('RUC' in valores && valores.RUC && !/^(10|15|17|20)\d{9}$/.test(valores.RUC)) return aviso('RUC: 11 dígitos que empiecen con 10, 15, 17 o 20.', 'error');
     for (const k of ['Telefono', 'Yape']) if (k in valores && valores[k] && !/^9\d{8}$/.test(valores[k])) return aviso('Celular: 9 dígitos que empiecen con 9.', 'error');
+    if ('DiasSuspension' in valores && (!/^\d{1,2}$/.test(valores.DiasSuspension || '0') || Number(valores.DiasSuspension) > 60)) return aviso('Días hasta la suspensión: un número de 0 a 60.', 'error');
     if ('Email' in valores && valores.Email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(valores.Email)) return aviso('Correo inválido.', 'error');
     if (!(await confirmar(Object.keys(valores).join(', '), { titulo: '¿Guardar estos cambios?', si: 'Guardar' }))) return;
     await encolar({ tipo: 'GUARDAR_CONFIG', datos: { valores } });

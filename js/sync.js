@@ -29,7 +29,12 @@ export async function encolar(op) {
 }
 
 /** Vuelve a poner sobre los datos descargados lo que este celular aún no envió. */
-export async function reaplicarPendientes() { aplicarPendientes(await pendientesDeEnvio()); }
+export async function reaplicarPendientes() {
+  // los avisos de WhatsApp ya enviados también: si Android cerró la app entre el envío y la descarga, el
+  // cliente no debe volver a aparecer como "por avisar" (aplicarPendientes no duplica: compara ID_SOLICITUD)
+  const avisos = (await colaTodos()).filter((o) => o.estadoLocal === 'ok' && o.tipo === 'REGISTRAR_AVISO');
+  aplicarPendientes((await pendientesDeEnvio()).concat(avisos));
+}
 
 /** Número provisional para el comprobante hecho sin señal: PEND-<iniciales>-<n> */
 export async function siguienteProvisional(iniciales) {
