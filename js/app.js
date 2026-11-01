@@ -411,7 +411,7 @@ async function vCliente(id) {
         <p class="sub">Toque un pago para ver el detalle, el PDF o anularlo.</p>`, pagos.length)}
     </section>`;
   prepararSecciones(vista());
-  $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, plantilla('MsgCobranza', id));
+  $('#btnRecordatorio').onclick = () => enviarWhatsApp(id, mensajeAviso(id));   // el mismo del recordatorio masivo
   // claves WiFi/router: se piden al servidor en el momento (no se guardan en el celular; queda registro de quién las vio)
   $('#btnClaves').onclick = async () => {
     const b = $('#btnClaves');
@@ -442,7 +442,7 @@ async function vCliente(id) {
   vista().querySelectorAll('[data-revertir]').forEach((b) => { b.onclick = () => revertirConvenio(b.dataset.revertir); });
   vista().querySelectorAll('[data-menu]').forEach((b) => { b.onclick = () => menuServicio(b.dataset.menu); });
   vista().querySelectorAll('[data-orden-corte]').forEach((b) => { b.onclick = () => ordenCorte(b.dataset.ordenCorte); });
-  vista().querySelectorAll('[data-aviso-corte]').forEach((b) => { b.onclick = () => enviarWhatsApp(id, plantilla('MsgCorte', id)); });
+  vista().querySelectorAll('[data-aviso-corte]').forEach((b) => { b.onclick = () => enviarWhatsApp(id, mensajeAviso(id, {}, 'CORTE')); });
   ordenesLocales().then((lista) => {
     const mias = lista.filter((o) => o.items.some((it) => it.idCliente === id)).slice(0, 10);
     const cont = $('#otCliente');
@@ -1073,9 +1073,10 @@ async function elegirEnMapa(actual) {
 
 // ---- CAPAS DEL MAPA: calles, satélite y terreno (en zonas rurales el relieve y la foto guían mejor) ----
 const CAPAS_MAPA = {
-  calles: ['Calles', 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }],
-  satelite: ['Satélite', 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imágenes © Esri' }],
-  terreno: ['Terreno', 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '© OpenTopoMap (CC-BY-SA) · © OpenStreetMap' }],
+  // maxNativeZoom: hasta dónde hay imagen real; más cerca se amplía esa misma imagen (antes quedaba gris o en blanco)
+  calles: ['Calles', 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© OpenStreetMap' }],
+  satelite: ['Satélite', 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 17, attribution: 'Imágenes © Esri' }],
+  terreno: ['Terreno', 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 17, attribution: '© OpenTopoMap (CC-BY-SA) · © OpenStreetMap' }],
 };
 const AYUDA_CAPAS = 'Calles: mapa normal con nombres.\nSatélite: foto real desde arriba (casas, chacras, caminos).\nTerreno: muestra cerros, quebradas y ríos con curvas de nivel: útil para llegar en zonas rurales.\nLa capa que elija queda guardada en este celular.';
 /** Botones grandes de capa (en vez del control pequeño de Leaflet) dentro de cont. */
@@ -1086,7 +1087,6 @@ async function ponerCapas(L, mapa, cont) {
   const usar = (k) => {
     Object.values(capas).forEach((c) => mapa.removeLayer(c));
     capas[k].addTo(mapa);
-    if (mapa.getZoom() > CAPAS_MAPA[k][2].maxZoom) mapa.setZoom(CAPAS_MAPA[k][2].maxZoom);
     actual = k;
     cont.querySelectorAll('[data-capa]').forEach((b) => { const si = b.dataset.capa === k; b.classList.toggle('sel', si); b.setAttribute('aria-pressed', si); });
   };
@@ -1136,9 +1136,10 @@ async function vMapaGeneral() {
   vista().innerHTML = `<h2 class="tit-ic">${ic('mapa')}Mapa general ${ayuda('Mapa general', AYUDA_MAPA)}</h2>
     <div class="chips-mapa" id="mgF" role="group" aria-label="Qué mostrar"></div>
     <label class="fila-zona">Zona<select id="mgZona"><option value="">Todas las zonas</option>${zonas.map((z) => `<option ${z === zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
-    <div id="mgCapas"></div>
+    <div class="mapa-env" id="mgEnv"><div id="mgCapas"></div>
     <div class="mapa-caja"><div id="mapaG" class="mapa mapa-general" aria-label="Mapa de clientes y órdenes"></div>
-      <button type="button" class="btn-mapa" id="mgYo" aria-label="Mi ubicación">${ic('ubicacion')}</button></div>
+      <button type="button" class="btn-mapa arriba" id="mgFull" aria-label="Pantalla completa" aria-pressed="false">${ic('ampliar')}</button>
+      <button type="button" class="btn-mapa" id="mgYo" aria-label="Mi ubicación">${ic('ubicacion')}</button></div></div>
     <p class="sub" id="mgTxt"></p>
     ${sinUbic ? `<p class="globo">${ic('info')}<span>${sinUbic} cliente(s) aún no tienen ubicación guardada y no aparecen en el mapa.</span></p>` : ''}`;
   const pintarChips = (cuenta) => {
@@ -1190,6 +1191,16 @@ async function vMapaGeneral() {
     if (primera && visibles.length) { mapa.fitBounds(L.latLngBounds(visibles), { padding: [30, 30], maxZoom: 16 }); primera = false; }
   }
   $('#mgZona').onchange = () => { zona = $('#mgZona').value; kvSet('mapaZona', zona); primera = true; pintar(); };
+  // pantalla completa: el mapa ocupa todo el celular y se puede recorrer; Leaflet necesita recalcular su tamaño
+  $('#mgFull').onclick = () => {
+    const env = $('#mgEnv'), si = !env.classList.contains('completo');
+    env.classList.toggle('completo', si); document.body.classList.toggle('sin-scroll', si);
+    $('#mgFull').innerHTML = ic(si ? 'cerrar' : 'ampliar'); $('#mgFull').setAttribute('aria-label', si ? 'Salir de pantalla completa' : 'Pantalla completa');
+    $('#mgFull').setAttribute('aria-pressed', si);
+    setTimeout(() => mapa.invalidateSize(), 60); setTimeout(() => mapa.invalidateSize(), 350);
+  };
+  window.addEventListener('hashchange', () => document.body.classList.remove('sin-scroll'), { once: true });
+  window.addEventListener('resize', () => { if ($('#mapaG')) mapa.invalidateSize(); });
   $('#mgYo').onclick = () => navigator.geolocation && navigator.geolocation.getCurrentPosition((g) => {
     const p = [g.coords.latitude, g.coords.longitude];
     if (yo) yo.setLatLng(p); else yo = L.marker(p, { icon: L.divIcon({ className: 'mk-envoltura', html: '<span class="mk-yo"></span>', iconSize: [22, 22], iconAnchor: [11, 11] }), zIndexOffset: 2000 }).bindPopup('Usted está aquí').addTo(mapa);
@@ -1463,7 +1474,7 @@ function vCorte(idServ) {
         fecha: d.toISOString().slice(0, 10) });
     }
     aviso(navigator.onLine ? 'Enviado. Se aplicará en segundos.' : 'Guardado sin señal: se enviará al volver la conexión.');
-    if (accion === 'CORTAR' && (await confirmar('Se abrirá WhatsApp con el aviso de corte.', { titulo: '¿Avisar al cliente?', si: 'Avisar', no: 'No' }))) await enviarWhatsApp(s.ID_CLIENTE, plantilla('MsgCorte', s.ID_CLIENTE));
+    if (accion === 'CORTAR' && (await confirmar('Se abrirá WhatsApp con el aviso de corte.', { titulo: '¿Avisar al cliente?', si: 'Avisar', no: 'No' }))) await enviarWhatsApp(s.ID_CLIENTE, mensajeAviso(s.ID_CLIENTE, {}, 'CORTADO'));
     location.hash = '#/cliente/' + s.ID_CLIENTE;
   };
 }
@@ -1716,26 +1727,43 @@ async function vPerfil() {
 
 // ---- RECORDATORIO MASIVO POR WHATSAPP (envío guiado, uno por uno) + REPORTE --------------------
 // No se automatiza WhatsApp: la app abre el chat con el mensaje escrito y el técnico toca "Enviar".
-// Para cuidar el número: límite diario, pausa entre mensajes, saludo variado, sin enlaces y nunca
-// se repite a quien ya se avisó en la campaña (ni a quien pidió no recibir mensajes).
+// El mensaje depende del estado del cliente (al día, con deuda, para corte, cortado) y es el mismo que
+// usa la ficha. Para cuidar el número: límite diario, sin enlaces y nunca se repite a quien ya se avisó
+// en la campaña (ni a quien pidió no recibir mensajes).
 const MESES_LARGO = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SETIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+/** Tipo de aviso según el estado del cliente: [nombre, color, ícono, plantilla]. */
+const AV_TIPOS = {
+  RECORDATORIO: ['Al día', 'verde', 'check', 'MsgAvisoPago'],
+  COBRANZA: ['Con deuda', 'ambar', 'alerta', 'MsgAvisoDeuda'],
+  CORTE: ['Para corte', 'rojo', 'cortar', 'MsgAvisoCorte'],
+  CORTADO: ['Cortado', 'gris', 'cerrar', 'MsgAvisoCortado'],
+};
+/** Qué aviso le toca a un cliente por su estado (lo usan el masivo y la ficha). */
+function tipoAviso(id) {
+  const r = D.resumen[id] || {};
+  if (r.ESTADO === 'Cortado') return 'CORTADO';
+  if (/CORTAR/.test(r.ALERTA || '')) return 'CORTE';
+  return Number(r.DEUDA_VENCIDA) > 0 ? 'COBRANZA' : 'RECORDATORIO';
+}
+/** Mensaje de WhatsApp según el estado del cliente (extra: { ym, monto }). */
+const mensajeAviso = (id, extra = {}, tipo = tipoAviso(id)) => plantilla(AV_TIPOS[tipo][3], id, extra);
 const AV_RES = {
   ENVIADO: ['Enviados', 'verde', 'check'], SIN_WHATSAPP: ['Sin WhatsApp', 'ambar', 'alerta'], OMITIDO: ['Saltados', 'gris', 'flecha'],
-  NO_ENVIAR: ['No desean mensajes', 'rojo', 'cerrar'],
+  NUMERO: ['Corregir número', 'violeta', 'celular'], NO_ENVIAR: ['No desean', 'rojo', 'cerrar'],
 };
+const AV_MARCAS = ['QUITAR_NO_ENVIAR', 'NUMERO_PENDIENTE', 'NUMERO_REVISADO'];   // no son resultado de la campaña
 const AYUDA_MASIVO = 'Cómo se usa:\n1. Toque "Abrir WhatsApp": se abre el chat del cliente con el mensaje ya escrito.\n2. En WhatsApp toque ENVIAR y vuelva a la app.\n3. Toque "Sí, lo envié". La app pasa sola al siguiente cliente.\n\n' +
-  'Si la app se cierra mientras está en WhatsApp, al abrirla vuelve a ese mismo cliente y le pregunta si se envió: no se pierde ni se cuenta dos veces.\n\n' +
-  'Para que WhatsApp no bloquee su número:\n• Uno por uno, a mano (nada automático).\n• Límite por día en este celular (recomendado 30–40), en "Filtros y límite".\n• Sin enlaces en el mensaje.\n' +
-  '• Si alguien pide no recibir mensajes, márquelo: no se le volverá a ofrecer.\n• Pida a los clientes que guarden su número.\n\n' +
-  'Reenviar: en el Reporte toque "Reenviar" junto al cliente. "Otro número" envía el mismo mensaje a un familiar o a quien paga (no se guarda en la ficha).\n\n' +
-  'Nadie recibe dos veces el mismo recordatorio: lo que marcan todos los técnicos se junta al sincronizar.';
+  'El mensaje cambia según el cliente: al día, con deuda, para corte o cortado (los mismos de la ficha).\n\n' +
+  'Si la app se cierra mientras está en WhatsApp, al abrirla vuelve a ese mismo cliente: no se pierde ni se cuenta dos veces.\n\n' +
+  'Lo saltado queda en el Reporte: desde ahí puede enviarlo, marcarlo o corregir el número.\n\n' +
+  'Para que WhatsApp no bloquee su número: uno por uno y a mano, con un límite por día (recomendado 30–40). Si alguien pide no recibir mensajes, márquelo.';
 const SALUDOS = ['Hola', 'Buen día', 'Saludos', 'Hola, buen día', 'Estimado(a)'];
 /** Cambia el saludo inicial según el cliente (mensajes no idénticos), si la plantilla empieza con "Hola". */
 const variarSaludo = (msg, n) => String(msg).replace(/^Hola\b/, SALUDOS[n % SALUDOS.length]);
 const mesTxt = (ym) => MESES_LARGO[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4);
 /** Mes que se recuerda: desde el día 20, el mes siguiente. */
 const mesCampana = campanaActual;
-const telefonosOk = (c) => [c.TELEFONO, c.TELEFONO2].map((t) => String(t || '').replace(/\D/g, '').slice(-9)).filter((t) => /^9\d{8}$/.test(t));
+const telefonosOk = (c) => [...new Set([c.TELEFONO, c.TELEFONO2].map((t) => String(t || '').replace(/\D/g, '').slice(-9)).filter((t) => /^9\d{8}$/.test(t)))];
 /** Día (aaaa-mm-dd, hora de Lima) de una fecha guardada: el servidor la manda en UTC y el celular con -05:00. */
 const diaLima = (v) => {
   const t = String(v || '');
@@ -1743,33 +1771,46 @@ const diaLima = (v) => {
   const d = new Date(t);
   return isNaN(d) ? t.slice(0, 10) : d.toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
 };
+/** Última marca de cada cliente entre los resultados dados (marcas que no dependen de la campaña). */
+function ultimaMarca(resultados) {
+  const ult = {};
+  (D.avisos || []).filter((a) => resultados.includes(a.RESULTADO))
+    .sort((a, b) => String(a.FECHA).localeCompare(String(b.FECHA))).forEach((a) => { ult[a.ID_CLIENTE] = a; });
+  return ult;
+}
 /** Clientes que no quieren mensajes (la última marca de cada uno manda). */
 function noDesean() {
-  const ult = {};
-  (D.avisos || []).filter((a) => a.RESULTADO === 'NO_ENVIAR' || a.RESULTADO === 'QUITAR_NO_ENVIAR')
-    .sort((a, b) => String(a.FECHA).localeCompare(String(b.FECHA))).forEach((a) => { ult[a.ID_CLIENTE] = a; });
-  return new Set(Object.values(ult).filter((a) => a.RESULTADO === 'NO_ENVIAR').map((a) => a.ID_CLIENTE));
+  return new Set(Object.values(ultimaMarca(['NO_ENVIAR', 'QUITAR_NO_ENVIAR'])).filter((a) => a.RESULTADO === 'NO_ENVIAR').map((a) => a.ID_CLIENTE));
+}
+/** Números por corregir (pendientes de revisar): { idCliente: marca }. */
+function numerosPendientes() {
+  const u = ultimaMarca(['NUMERO_PENDIENTE', 'NUMERO_REVISADO']);
+  Object.keys(u).forEach((k) => { if (u[k].RESULTADO !== 'NUMERO_PENDIENTE') delete u[k]; });
+  return u;
 }
 /** Último resultado de cada cliente en la campaña. */
 function resultadosCampana(camp) {
   const r = {};
-  (D.avisos || []).filter((a) => a.CAMPANA === camp && a.RESULTADO !== 'QUITAR_NO_ENVIAR')
+  (D.avisos || []).filter((a) => a.CAMPANA === camp && !AV_MARCAS.includes(a.RESULTADO))
     .sort((a, b) => String(a.FECHA).localeCompare(String(b.FECHA))).forEach((a) => { r[a.ID_CLIENTE] = a; });
   return r;
 }
+/** Un cliente para el aviso del mes ym (o null si no tiene nada por pagar). */
+function itemAviso(c, ym) {
+  const r = D.resumen[c.ID_CLIENTE] || {}, det = detalleCobro(c.ID_CLIENTE, ym);
+  return { c, r, tels: telefonosOk(c), tipo: tipoAviso(c.ID_CLIENTE), deuda: Number(r.DEUDA_VENCIDA) || 0, det, monto: det.total };
+}
 /**
- * A quién se le puede avisar en el mes ym: servicio activo/moroso con algo por pagar hasta ese mes
- * (la cuota del mes aunque aún no venza, y la deuda vencida). Al día → recordatorio; con deuda → cobranza.
+ * A quién se le puede avisar en el mes ym: servicio activo, moroso o cortado con algo por pagar hasta ese mes
+ * (la cuota del mes aunque aún no venza, y la deuda vencida).
  */
 function candidatosAviso(ym) {
   const no = noDesean(), lista = [];
   D.clientes.forEach((c) => {
     const r = D.resumen[c.ID_CLIENTE] || {};
-    if (!['Activo', 'Moroso'].includes(r.ESTADO) || no.has(c.ID_CLIENTE)) return;
-    const det = detalleCobro(c.ID_CLIENTE, ym);
-    if (det.total <= 0) return;
-    const deuda = Number(r.DEUDA_VENCIDA) || 0;
-    lista.push({ c, r, tels: telefonosOk(c), tipo: deuda > 0 ? 'COBRANZA' : 'RECORDATORIO', deuda, det, monto: det.total });
+    if (!['Activo', 'Moroso', 'Cortado'].includes(r.ESTADO) || no.has(c.ID_CLIENTE)) return;
+    const x = itemAviso(c, ym);
+    if (x.monto > 0) lista.push(x);
   });
   return lista.sort((a, b) => String(a.c.ZONA).localeCompare(String(b.c.ZONA)) || String(a.c.NOMBRES).localeCompare(String(b.c.NOMBRES)));
 }
@@ -1790,25 +1831,59 @@ function abrirWhatsApp(telefono, mensaje) {
   return true;
 }
 
+/** Marca un resultado de aviso (desde la tarjeta o el reporte). */
+const marcarAviso = (id, resultado, datos = {}, motivo = '', idSolicitud) => encolar({ idSolicitud, tipo: 'REGISTRAR_AVISO', idCliente: id, usuarioLocal: PERFIL.email,
+  motivo, datos: Object.assign({ resultado, campana: mesCampana() }, datos) });
+
+/**
+ * Corregir el celular de un cliente: se guarda ya en la ficha o queda pendiente (Reporte → Corregir número).
+ * Devuelve true si cambió algo.
+ */
+function corregirNumero(id, sugerido = '') {
+  const c = D.porId[id] || {};
+  return new Promise((ok) => {
+    const m = modal(`<h3 id="dlgT">${ic('celular')} Corregir número</h3><p class="sub">${esc(c.NOMBRES || id)}</p>
+      <label>Celular nuevo (9 dígitos)<input id="cnNum" inputmode="numeric" maxlength="9" autocomplete="off" value="${esc(sugerido)}"></label>
+      <label>Reemplaza a<select id="cnCual"><option value="TELEFONO">Celular 1 · ${esc(c.TELEFONO || 'vacío')}</option><option value="TELEFONO2">Celular 2 · ${esc(c.TELEFONO2 || 'vacío')}</option></select></label>
+      <button class="btn grande verde" id="cnYa">${ic('check')}Guardar en la ficha</button>
+      <button class="btn" id="cnLuego">${ic('reloj')}Dejar pendiente para revisar</button>
+      <button class="btn secundario" id="cnNo">Cancelar</button>`);
+    const num = () => String(m.querySelector('#cnNum').value).replace(/\D/g, '');
+    m.querySelector('#cnNo').onclick = () => { cerrarModal(); ok(false); };
+    m.querySelector('#cnYa').onclick = async () => {
+      const n = num(), campo = m.querySelector('#cnCual').value;
+      if (!/^9\d{8}$/.test(n)) return aviso('Celular: 9 dígitos que empiecen con 9.', 'error');
+      cerrarModal();
+      await encolar({ tipo: 'EDITAR_CLIENTE', idCliente: id, datos: { [campo]: n } });
+      if (numerosPendientes()[id]) await marcarAviso(id, 'NUMERO_REVISADO', {}, 'Guardado ' + n);
+      aviso('Número guardado en la ficha.'); ok(true);
+    };
+    m.querySelector('#cnLuego').onclick = async () => {
+      const n = num(), campo = m.querySelector('#cnCual').value;
+      if (n && !/^9\d{8}$/.test(n)) return aviso('Celular: 9 dígitos que empiecen con 9 (o déjelo vacío).', 'error');
+      cerrarModal();
+      await marcarAviso(id, 'NUMERO_PENDIENTE', { telefono: n }, n ? `Nuevo ${campo === 'TELEFONO' ? 'celular 1' : 'celular 2'}: ${n}` : 'Revisar el número');
+      aviso('Quedó pendiente: Reporte → Corregir número.'); ok(true);
+    };
+  });
+}
+
 async function vAvisos(arg) {
   if (arg === 'reporte' || /^reporte:/.test(arg || '')) return vReporteAvisos(String(arg).split(':')[1]);
   const ym = mesCampana(), camp = ym;
-  const cand = candidatosAviso(ym);
-  // reenvío elegido por el técnico (desde el reporte): el cliente aparece aunque ya tenga resultado
+  let cand = candidatosAviso(ym);
+  // envío elegido por el técnico (desde el reporte): el cliente aparece aunque ya tenga resultado
   let forzado = /^reenviar:/.test(arg || '') ? String(arg).slice(9) : null;
-  const itemDe = (id) => cand.find((z) => z.c.ID_CLIENTE === id) || (() => { const c = D.porId[id]; if (!c) return null;
-    const r = D.resumen[id] || {}, det = detalleCobro(id, ym), deuda = Number(r.DEUDA_VENCIDA) || 0;
-    return { c, r, tels: telefonosOk(c), tipo: deuda > 0 ? 'COBRANZA' : 'RECORDATORIO', deuda, det, monto: det.total }; })();
-  const f = Object.assign({ zona: '', tipos: { RECORDATORIO: true, COBRANZA: true }, limite: 40, saltados: false }, (await kvGet('avisosFiltro')) || {});
+  const itemDe = (id) => cand.find((z) => z.c.ID_CLIENTE === id) || (D.porId[id] ? itemAviso(D.porId[id], ym) : null);
+  const f = Object.assign({ zona: '', tipos: {}, limite: 40 }, (await kvGet('avisosFiltro')) || {});
+  Object.keys(AV_TIPOS).forEach((k) => { if (f.tipos[k] === undefined) f.tipos[k] = true; });
   const yo = PERFIL.email, hoy = hoyISO();
-  // cada mensaje real cuenta UNA vez (por su ID de marca), aunque la app se reinicie o los datos tarden en bajar;
-  // un reenvío o un envío a otro número es otro mensaje y sí suma
+  // cada mensaje real cuenta UNA vez (por su ID de marca), aunque la app se reinicie o los datos tarden en bajar
   const enviadosHoy = () => new Set((D.avisos || []).filter((a) => a.RESULTADO === 'ENVIADO' && diaLima(a.FECHA) === hoy &&
     (!a.USUARIO || a.USUARIO === yo)).map((a) => a.ID_SOLICITUD || a.ID_AVISO)).size;
   const zonas = [...new Set(cand.map((x) => x.c.ZONA).filter(Boolean))].sort();
   const pendientes = () => { const h = resultadosCampana(camp);
-    return cand.filter((x) => { const r = h[x.c.ID_CLIENTE];
-      return (!r || (f.saltados && r.RESULTADO === 'OMITIDO')) && f.tipos[x.tipo] && (!f.zona || x.c.ZONA === f.zona); }); };
+    return cand.filter((x) => !h[x.c.ID_CLIENTE] && f.tipos[x.tipo] && (!f.zona || x.c.ZONA === f.zona)); };
   const sinCel = cand.filter((x) => !x.tels.length).length;
   // cliente que quedó abierto en WhatsApp: si Android cerró la app, al volver se sigue con él
   let enCurso = await kvGet('avisoAbierto');
@@ -1818,66 +1893,68 @@ async function vAvisos(arg) {
   }
   if (enCurso) forzado = enCurso.reenvio ? enCurso.id : forzado;
   if (forzado && !itemDe(forzado)) forzado = null;
-  let actual = enCurso ? enCurso.id : forzado, abierto = !!enCurso, tel = enCurso ? enCurso.tel : '', volvio = !!enCurso, ocupado = false;
+  let actual = enCurso ? enCurso.id : forzado, abierto = !!enCurso, tel = enCurso ? enCurso.tel : '', volvio = !!enCurso, ocupado = false, verMsg = false;
   let otroTel = enCurso && enCurso.otro ? enCurso.tel : '';   // número escrito a mano (familiar, quien paga…)
-  const filtros = `<div class="chips-mapa" role="group" aria-label="Tipo de mensaje">
-      <button type="button" class="chip-mapa c-verde ${f.tipos.RECORDATORIO ? 'sel' : ''}" data-tipo="RECORDATORIO" aria-pressed="${!!f.tipos.RECORDATORIO}"><span class="mk mk-verde">${ic('check')}</span>Al día</button>
-      <button type="button" class="chip-mapa c-ambar ${f.tipos.COBRANZA ? 'sel' : ''}" data-tipo="COBRANZA" aria-pressed="${!!f.tipos.COBRANZA}"><span class="mk mk-ambar">${ic('alerta')}</span>Con deuda</button></div>
-    <label class="fila-zona">Zona<select id="avZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === f.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
-    <label class="fila-zona">Límite por día en este celular<input id="avLim" type="number" min="5" max="80" step="5" value="${Number(f.limite) || 40}" inputmode="numeric"></label>
-    <label class="check"><input type="checkbox" id="avSalt" ${f.saltados ? 'checked' : ''}> Volver a mostrar los que salté</label>
-    ${sinCel ? `<p class="sub">${sinCel} cliente(s) sin un celular válido: no aparecen (corríjalo en su ficha).</p>` : ''}`;
-  vista().innerHTML = `<section class="form"><h2 class="tit-ic">${ic('chat')}Recordatorio masivo ${ayuda('Cómo se usa', AYUDA_MASIVO)}</h2>
-    ${!D.config.Yape && !D.config.BCP && !D.config.BN ? `<p class="aviso error">${ic('alerta')}<span>Faltan las cuentas de cobro (Yape, BCP, B. Nación): el mensaje saldría sin ellas. <a href="#/negocio/cobro">Completarlas</a>.</span></p>` : ''}
+  // id de la marca del envío forzado: si la app se reinicia, se sabe si ya se anotó (y no se cuenta dos veces)
+  let marcaReenvio = (enCurso && enCurso.marca) || crypto.randomUUID();
+  const filtros = `<div class="chips-mapa" role="group" aria-label="A quiénes">${Object.entries(AV_TIPOS).map(([k, [t, col, icn]]) =>
+      `<button type="button" class="chip-mapa c-${col} ${f.tipos[k] ? 'sel' : ''}" data-tipo="${k}" aria-pressed="${!!f.tipos[k]}"><span class="mk mk-${col}">${ic(icn)}</span>${t}</button>`).join('')}</div>
+    <div class="av-fila2"><label>Zona<select id="avZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === f.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
+      <label>Límite por día<input id="avLim" type="number" min="5" max="80" step="5" value="${Number(f.limite) || 40}" inputmode="numeric"></label></div>
+    ${sinCel ? `<p class="sub">${sinCel} cliente(s) sin celular válido no aparecen: corríjalos en su ficha.</p>` : ''}`;
+  vista().innerHTML = `<section class="form"><div class="av-titulo"><h2 class="tit-ic">${ic('chat')}Recordatorio masivo ${ayuda('Cómo se usa', AYUDA_MASIVO)}</h2>
+      <a class="mini" href="#/avisos/reporte">${ic('lista')}Reporte</a></div>
+    ${!D.config.Yape && !D.config.BCP && !D.config.BN ? `<p class="aviso error">${ic('alerta')}<span>Faltan las cuentas de cobro. <a href="#/negocio/cobro">Completarlas</a>.</span></p>` : ''}
     <div id="avCaja"></div>
-    ${seccion('avFiltros', 'Filtros y límite por día', filtros)}
-    <div class="botones"><a class="btn secundario" href="#/avisos/reporte">${ic('lista')}Reporte</a><a class="btn secundario" href="#/negocio/mensajes">${ic('editar')}Texto</a></div></section>`;
+    ${seccion('avFiltros', 'A quiénes y límite', filtros)}
+    <a class="enlace-ic" href="#/negocio/mensajes">${ic('editar')}Cambiar el texto de los mensajes</a></section>`;
   prepararSecciones(vista());
   const guardarF = () => kvSet('avisosFiltro', f);
   vista().querySelectorAll('[data-tipo]').forEach((b) => { b.onclick = () => { f.tipos[b.dataset.tipo] = !f.tipos[b.dataset.tipo];
     b.classList.toggle('sel', f.tipos[b.dataset.tipo]); b.setAttribute('aria-pressed', f.tipos[b.dataset.tipo]); guardarF(); pintar(); }; });
   $('#avZona').onchange = () => { f.zona = $('#avZona').value; guardarF(); pintar(); };
-  $('#avSalt').onchange = () => { f.saltados = $('#avSalt').checked; guardarF(); pintar(); };
   $('#avLim').onchange = () => { f.limite = Math.min(80, Math.max(5, Number($('#avLim').value) || 40)); $('#avLim').value = f.limite; guardarF(); pintar(); };
-  // id de la marca del reenvío: si la app se reinicia, se sabe si ya se anotó (y no se cuenta dos veces)
-  let marcaReenvio = (enCurso && enCurso.marca) || crypto.randomUUID();
   function pintar() {
     const caja = $('#avCaja');
     if (!caja) return;
     const lista = pendientes().filter((x) => x.tels.length);
-    const previo = (id) => resultadosCampana(camp)[id];
-    // el cliente abierto en WhatsApp (o el elegido para reenviar) sigue en pantalla aunque cambien los filtros
+    // el cliente abierto en WhatsApp (o el elegido desde el reporte) sigue en pantalla aunque cambien los filtros
     if (forzado && actual !== forzado && !abierto) actual = forzado;
     if ((abierto || forzado) && actual && !lista.some((x) => x.c.ID_CLIENTE === actual)) { const y = itemDe(actual); if (y) lista.unshift(y); }
     const env = enviadosHoy(), lim = Number(f.limite) || 40, tope = env >= lim;
-    const cab = `<div class="av-progreso"><span>Pago de <b>${esc(mesTxt(ym))}</b> · <b>${lista.length}</b> por avisar</span><span class="${tope ? 'error' : ''}">Hoy <b>${env}</b> de ${lim}</span></div>
+    const cab = `<div class="av-progreso"><span>${esc(mesTxt(ym))} · <b>${lista.length}</b> por avisar</span><span class="${tope ? 'error' : ''}">Hoy <b>${env}</b>/${lim}</span></div>
       <div class="barra"><i class="${tope ? 'peligro' : ''}" style="width:${Math.min(100, Math.round(env / lim * 100))}%"></i></div>`;
-    if (!lista.length) { caja.innerHTML = cab + `<div class="tarjeta-form centro"><span class="mk mk-verde grande">${ic('check')}</span><p><b>No queda nadie por avisar</b> con estos filtros.</p></div>`; return; }
+    if (!lista.length) { caja.innerHTML = cab + `<div class="tarjeta-form centro"><span class="mk mk-verde grande">${ic('check')}</span><p><b>No queda nadie por avisar</b> con estos filtros.</p>
+      <a class="btn secundario" href="#/avisos/reporte">${ic('lista')}Ver saltados y pendientes</a></div>`; return; }
     let i = lista.findIndex((x) => x.c.ID_CLIENTE === actual);
     if (i < 0) i = 0;
-    const x = lista[i], c = x.c;
+    const x = lista[i], c = x.c, [tTxt, tCol, tIc] = AV_TIPOS[x.tipo];
     actual = c.ID_CLIENTE;
-    const tels = otroTel ? x.tels.concat(x.tels.includes(otroTel) ? [] : [otroTel]) : x.tels;
+    const tels = otroTel && !x.tels.includes(otroTel) ? x.tels.concat([otroTel]) : x.tels;
     if (!tels.includes(tel)) tel = tels[0] || '';
-    const ant = forzado === c.ID_CLIENTE ? previo(c.ID_CLIENTE) : null;
-    const msg = variarSaludo(plantilla('MsgRecordatorio', c.ID_CLIENTE, { ym, monto: x.monto }), Number(String(c.ID_CLIENTE).replace(/\D/g, '')) || i);
+    const ant = forzado === c.ID_CLIENTE ? resultadosCampana(camp)[c.ID_CLIENTE] : null;
+    const msg = variarSaludo(mensajeAviso(c.ID_CLIENTE, { ym, monto: x.monto }, x.tipo), Number(String(c.ID_CLIENTE).replace(/\D/g, '')) || i);
+    const pendNum = numerosPendientes()[c.ID_CLIENTE];
     caja.innerHTML = cab + `<div class="tarjeta-form av-tarjeta">
-        <div class="av-cab"><span class="mk mk-${x.tipo === 'COBRANZA' ? 'ambar' : 'verde'}">${ic(x.tipo === 'COBRANZA' ? 'alerta' : 'check')}</span>
-          <div><b>${esc(c.NOMBRES)}</b><small>${esc(c.ID_CLIENTE)} · ${esc(c.ZONA || 'sin zona')}</small>
-          <small>${esc(x.det.servicio)} · <b>${soles(x.monto)}</b>${x.deuda > 0 ? ` · debe ${esc(x.r.MESES_ADEUDA || 0)} mes/es` : ` · vence ${esc(txtFecha(x.det.vence))}`}</small></div></div>
-        ${ant ? `<p class="globo">${ic('info')}<span><b>Reenvío.</b> Ya tenía "${esc({ ENVIADO: 'Enviado', SIN_WHATSAPP: 'Sin WhatsApp', OMITIDO: 'Saltado' }[ant.RESULTADO] || ant.RESULTADO)}"${ant.FECHA ? ' el ' + esc(txtFecha(diaLima(ant.FECHA))) : ''}.</span></p>` : ''}
-        <div class="chips-mapa">${tels.map((t) => `<button type="button" class="mini ${t === tel ? 'sel' : ''}" data-tel="${t}" aria-pressed="${t === tel}" ${abierto ? 'disabled' : ''}>${ic('celular')}${t}${t === otroTel ? ' (otro)' : ''}</button>`).join('')}
-          ${abierto ? '' : `<button type="button" class="mini" id="avOtroNum">${ic('agregar')}Otro número</button>`}</div>
-        <details class="av-msg"><summary>Ver el mensaje</summary><p class="mensaje">${esc(msg)}</p></details>
-        ${abierto ? `<p class="av-paso"><span>2</span>${volvio ? 'Volvió de WhatsApp. ' : ''}¿Se envió el mensaje?</p>
+        <div class="av-cab"><span class="mk mk-${tCol}">${ic(tIc)}</span>
+          <div><b>${esc(c.NOMBRES)}</b><small>${esc(c.ZONA || 'sin zona')} · <span class="chip c-${tCol}">${tTxt}</span></small>
+          <small>${esc(x.det.servicio)} · <b>${soles(x.monto)}</b>${x.det.lineas > 1 ? ` · ${x.det.lineas} mes(es)` : ''}</small></div></div>
+        ${ant ? `<p class="globo">${ic('info')}<span>Ya tenía "${esc({ ENVIADO: 'Enviado', SIN_WHATSAPP: 'Sin WhatsApp', OMITIDO: 'Saltado' }[ant.RESULTADO] || ant.RESULTADO)}"${ant.FECHA ? ' el ' + esc(txtFecha(diaLima(ant.FECHA))) : ''}.</span></p>` : ''}
+        ${pendNum ? `<p class="globo">${ic('celular')}<span>Número pendiente de corregir${pendNum.OBS ? ': ' + esc(pendNum.OBS) : ''}.</span></p>` : ''}
+        <div class="av-tels" role="group" aria-label="Celular">${tels.map((t) => `<button type="button" class="mini ${t === tel ? 'sel' : ''}" data-tel="${t}" aria-pressed="${t === tel}" ${abierto ? 'disabled' : ''}>${ic('celular')}${t}${t === otroTel ? ' (otro)' : ''}</button>`).join('')}
+          <button type="button" class="mini icono" id="avNum" aria-label="Cambiar o corregir el número" ${abierto ? 'disabled' : ''}>${ic('editar')}</button></div>
+        <div class="av-ver"><button type="button" class="mini" id="avVer" aria-expanded="${verMsg}">${ic('ver')}${verMsg ? 'Ocultar' : 'Ver'} mensaje</button>
+          <button type="button" class="mini" id="avCopiar">${ic('documento')}Copiar</button></div>
+        ${verMsg ? `<p class="mensaje av-texto">${esc(msg)}</p>` : ''}
+        ${abierto ? `<p class="av-paso"><span>2</span>${volvio ? 'Volvió de WhatsApp. ' : ''}¿Se envió?</p>
             <button class="btn grande verde" data-res="ENVIADO">${ic('check')}Sí, lo envié</button>
-            <div class="av-dos"><button class="btn" data-res="SIN_WHATSAPP">${ic('alerta')}No tiene WhatsApp</button>
-              <button class="btn" data-res="NO_ENVIAR">${ic('cerrar')}No desea mensajes</button></div>
-            <button class="btn secundario" id="avOtra">${ic('chat')}No se abrió: abrir otra vez</button>`
-          : tope ? `<p class="aviso error">${ic('alerta')}<span>Llegó al límite de hoy en este celular. Para cuidar su número, siga mañana (o súbalo con cuidado en "Filtros y límite").</span></p>`
+            <div class="av-dos"><button class="btn" data-res="SIN_WHATSAPP">${ic('alerta')}Sin WhatsApp</button>
+              <button class="btn" id="avOtra">${ic('chat')}Abrir otra vez</button></div>`
+          : tope ? `<p class="aviso error">${ic('alerta')}<span>Llegó al límite de hoy. Siga mañana (o súbalo con cuidado en "A quiénes y límite").</span></p>`
           : `<p class="av-paso"><span>1</span>Abra WhatsApp y toque <b>ENVIAR</b></p>
             <button class="btn grande verde" id="avAbrir">${ic('chat')}Abrir WhatsApp</button>`}
         <div class="av-nav"><button class="mini" id="avAnt" ${i && !abierto ? '' : 'disabled'}>${ic('atras')}Anterior</button>
+          <button class="mini" id="avMas">${ic('puntos')}Más</button>
           <button class="mini" data-res="OMITIDO">Saltar${ic('flecha')}</button></div></div>`;
     caja.querySelectorAll('[data-tel]').forEach((b) => { b.onclick = () => { tel = b.dataset.tel; pintar(); }; });
     const abrir = () => {
@@ -1886,89 +1963,131 @@ async function vAvisos(arg) {
       kvSet('avisoAbierto', { camp, id: c.ID_CLIENTE, tel, otro: tel === otroTel, reenvio: forzado === c.ID_CLIENTE, marca: marcaReenvio });
       abierto = true; volvio = false; pintar();
     };
-    if ($('#avOtroNum')) $('#avOtroNum').onclick = async () => {
-      const n = String((await pedirTexto('Celular de 9 dígitos (familiar, quien paga, etc.). No se guarda en la ficha: solo para este envío.',
-        { titulo: 'Enviar a otro número', valor: otroTel, si: 'Usar este número' })) || '').replace(/\D/g, '').slice(-9);
-      if (!n) return;
-      if (!/^9\d{8}$/.test(n)) return aviso('Celular: 9 dígitos que empiecen con 9.', 'error');
-      otroTel = n; tel = n; pintar();
+    $('#avVer').onclick = () => { verMsg = !verMsg; pintar(); };
+    $('#avCopiar').onclick = async () => {
+      verMsg = true; pintar();
+      try { await navigator.clipboard.writeText(msg); aviso('Mensaje copiado: péguelo donde quiera.'); }
+      catch (e) { aviso('No se pudo copiar: mantenga presionado el texto para copiarlo.', 'error'); }
     };
+    $('#avNum').onclick = () => menuOpciones('Número de ' + c.NOMBRES, [
+      { t: 'Enviar a otro número (solo esta vez)', icono: 'chat', fn: async () => {
+        const n = String((await pedirTexto('Celular de 9 dígitos (familiar, quien paga…). No se guarda en la ficha.',
+          { titulo: 'Enviar a otro número', valor: otroTel, si: 'Usar este número' })) || '').replace(/\D/g, '').slice(-9);
+        if (!n) return;
+        if (!/^9\d{8}$/.test(n)) return aviso('Celular: 9 dígitos que empiecen con 9.', 'error');
+        otroTel = n; tel = n; pintar();
+      } },
+      { t: 'Corregir el número del cliente', icono: 'editar', fn: async () => { if (await corregirNumero(c.ID_CLIENTE)) { cand = candidatosAviso(ym); pintar(); } } },
+    ]);
+    $('#avMas').onclick = () => menuOpciones(c.NOMBRES, [
+      { t: 'Ver la ficha del cliente', icono: 'usuario', href: '#/cliente/' + c.ID_CLIENTE },
+      { t: 'No desea mensajes', icono: 'cerrar', fn: () => registrar('NO_ENVIAR') },
+    ]);
     if ($('#avAbrir')) $('#avAbrir').onclick = abrir;
     if ($('#avOtra')) $('#avOtra').onclick = abrir;
     if ($('#avAnt')) $('#avAnt').onclick = () => { forzado = null; otroTel = ''; actual = lista[Math.max(0, i - 1)].c.ID_CLIENTE; tel = ''; pintar(); };
-    caja.querySelectorAll('[data-res]').forEach((b) => { b.onclick = async () => {
+    async function registrar(res) {
       if (ocupado) return;                              // un doble toque no registra dos veces
-      const res = b.dataset.res;
       if (res === 'NO_ENVIAR' && !(await confirmar(`${c.NOMBRES} no recibirá más recordatorios por WhatsApp (se puede quitar la marca en el reporte).`, { titulo: '¿No desea mensajes?', si: 'Marcar' }))) return;
       ocupado = true;
       caja.querySelectorAll('button').forEach((y) => { y.disabled = true; });
       const fueForzado = forzado === c.ID_CLIENTE;
       const sig = fueForzado ? null : lista[i + 1] ? lista[i + 1].c.ID_CLIENTE : null;
       try {
-        await encolar({ idSolicitud: fueForzado ? marcaReenvio : undefined, tipo: 'REGISTRAR_AVISO', idCliente: c.ID_CLIENTE, usuarioLocal: yo,
-          motivo: [res === 'OMITIDO' && abierto ? 'Abrió WhatsApp y lo saltó' : '', fueForzado ? 'Reenvío' : '', tel === otroTel ? 'A otro número' : ''].filter(Boolean).join(' · '),
-          datos: { resultado: res, tipo: x.tipo, campana: camp, telefono: tel, monto: x.monto } });
+        await marcarAviso(c.ID_CLIENTE, res, { tipo: x.tipo, campana: camp, telefono: tel, monto: x.monto },
+          [res === 'OMITIDO' && abierto ? 'Abrió WhatsApp y lo saltó' : '', fueForzado ? 'Desde el reporte' : '', tel === otroTel ? 'A otro número' : ''].filter(Boolean).join(' · '),
+          fueForzado ? marcaReenvio : undefined);
         await kvSet('avisoAbierto', null);
         if (fueForzado) { forzado = null; marcaReenvio = crypto.randomUUID(); if (location.hash !== '#/avisos') history.replaceState(null, '', '#/avisos'); }
-        abierto = false; volvio = false; tel = ''; otroTel = ''; actual = sig;
+        abierto = false; volvio = false; tel = ''; otroTel = ''; verMsg = false; actual = sig;
         if (res === 'ENVIADO') aviso(`Anotado: ${c.NOMBRES}. Sigue el próximo.`);
+        if (res === 'OMITIDO') aviso('Saltado: queda en el Reporte para enviarlo después.');
       } catch (e) { aviso('No se pudo anotar: ' + e.message, 'error'); }
       ocupado = false; pintar();
-    }; });
+    }
+    caja.querySelectorAll('[data-res]').forEach((b) => { b.onclick = () => registrar(b.dataset.res); });
   }
   pintar();
 }
 
-/** Reporte: a quién se envió, quién no tiene WhatsApp, a quién se saltó y quién no desea mensajes. */
+/** Reporte: enviados, sin WhatsApp, saltados, números por corregir, quienes no desean y los que faltan. */
 async function vReporteAvisos(campSel) {
   const camps = [...new Set((D.avisos || []).map((a) => a.CAMPANA).filter(Boolean).concat([mesCampana()]))].sort().reverse();
-  const camp = campSel || camps[0];
+  const camp = campSel || camps[0], actualCamp = camp === mesCampana();
   const filtro = Object.assign({ res: 'ENVIADO', zona: '' }, (await kvGet('avisosReporte')) || {});
-  const r = resultadosCampana(camp), todos = Object.values(r);
-  const cand = camp === mesCampana() ? candidatosAviso(camp) : [];
-  const faltan = cand.filter((x) => !r[x.c.ID_CLIENTE]).length;
-  const no = noDesean();
-  const cuenta = (k) => (k === 'NO_ENVIAR' ? no.size : todos.filter((a) => a.RESULTADO === k).length);
-  const zonas = [...new Set(todos.map((a) => a.ZONA).filter(Boolean))].sort();
+  if (filtro.res === 'FALTAN' && !actualCamp) filtro.res = 'ENVIADO';
+  let r, todos, cand, faltan, no, nums;
+  const calcular = () => {
+    r = resultadosCampana(camp); todos = Object.values(r);
+    cand = actualCamp ? candidatosAviso(camp) : [];
+    faltan = cand.filter((x) => !r[x.c.ID_CLIENTE]);
+    no = noDesean(); nums = numerosPendientes();
+  };
+  calcular();
+  const cuenta = (k) => (k === 'NO_ENVIAR' ? no.size : k === 'NUMERO' ? Object.keys(nums).length : k === 'FALTAN' ? faltan.length : todos.filter((a) => a.RESULTADO === k).length);
+  const grupos = Object.assign({}, AV_RES, actualCamp ? { FALTAN: ['Faltan', 'azul', 'reloj'] } : {});
+  const zonas = [...new Set(todos.map((a) => a.ZONA).concat(cand.map((x) => x.c.ZONA)).filter(Boolean))].sort();
   vista().innerHTML = `<section><a class="volver no-imprimir" href="#/avisos">${ic('atras')}Recordatorio masivo</a>
-    <h2 class="tit-ic">${ic('lista')}Reporte de avisos ${ayuda('Reporte', 'Muestra el último resultado marcado para cada cliente en la campaña (mes del pago).\nIncluye lo de todos los técnicos después de sincronizar. Lo marcado en este celular y aún no enviado lleva "por enviar".\n"Faltan" son los clientes que todavía no tienen ningún resultado.')}</h2>
+    <h2 class="tit-ic">${ic('lista')}Reporte de avisos ${ayuda('Reporte', 'Último resultado de cada cliente en la campaña (mes del pago), de todos los técnicos después de sincronizar.\nToque los tres puntos de un cliente para enviarle el mensaje, marcar si se envió o corregir su número.\n"Faltan": todavía sin ningún resultado.')}</h2>
     <div class="filtros no-imprimir"><label>Campaña<select id="rpCamp">${camps.map((k) => `<option value="${esc(k)}" ${k === camp ? 'selected' : ''}>${esc(mesTxt(k))}</option>`).join('')}</select></label>
       <label>Zona<select id="rpZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === filtro.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label></div>
-    <div class="chips-mapa no-imprimir" role="group" aria-label="Resultado">${Object.entries(AV_RES).map(([k, [t, col, icn]]) =>
-      `<button type="button" class="chip-mapa c-${col} ${filtro.res === k ? 'sel' : ''}" data-r="${k}" aria-pressed="${filtro.res === k}"><span class="mk mk-${col}">${ic(icn)}</span>${t} <b>${cuenta(k)}</b></button>`).join('')}
-      ${cand.length ? `<span class="chip-mapa sel" aria-label="Faltan"><span class="mk mk-azul">${ic('reloj')}</span>Faltan <b>${faltan}</b></span>` : ''}</div>
+    <div class="chips-mapa no-imprimir" id="rpChips" role="group" aria-label="Resultado"></div>
     <h3 class="solo-imprimir">${esc(D.config.Negocio || 'D@NDINET')} · Avisos de ${esc(mesTxt(camp))}</h3>
     <ul class="lista" id="rpLista"></ul>
     <div class="botones no-imprimir"><button class="btn" id="rpCopiar">${ic('compartir')}Copiar resumen</button><button class="btn" id="rpImprimir">${ic('descargar')}Imprimir / PDF</button></div></section>`;
-  const pintar = () => {
-    const lista = (filtro.res === 'NO_ENVIAR' ? [...no].map((id) => { const c = D.porId[id] || {};
-        return (D.avisos || []).filter((a) => a.ID_CLIENTE === id && a.RESULTADO === 'NO_ENVIAR').pop() || { ID_CLIENTE: id, CLIENTE: c.NOMBRES, ZONA: c.ZONA }; })
-      : todos.filter((a) => a.RESULTADO === filtro.res)).filter((a) => !filtro.zona || a.ZONA === filtro.zona)
+  const filas = () => {
+    const base = (id, extra = {}) => { const c = D.porId[id] || {}; return Object.assign({ ID_CLIENTE: id, CLIENTE: c.NOMBRES, ZONA: c.ZONA }, extra); };
+    const l = filtro.res === 'NO_ENVIAR' ? [...no].map((id) => (D.avisos || []).filter((a) => a.ID_CLIENTE === id && a.RESULTADO === 'NO_ENVIAR').pop() || base(id))
+      : filtro.res === 'NUMERO' ? Object.values(nums)
+      : filtro.res === 'FALTAN' ? faltan.map((x) => base(x.c.ID_CLIENTE, { MONTO: x.monto, OBS: AV_TIPOS[x.tipo][0] }))
+      : todos.filter((a) => a.RESULTADO === filtro.res);
+    return l.filter((a) => !filtro.zona || a.ZONA === filtro.zona)
       .sort((a, b) => String(a.ZONA).localeCompare(String(b.ZONA)) || String(a.CLIENTE).localeCompare(String(b.CLIENTE)));
-    $('#rpLista').innerHTML = lista.map((a) => `<li><a href="#/cliente/${esc(a.ID_CLIENTE)}"><div><b>${esc(a.CLIENTE || a.ID_CLIENTE)}</b>
-      <small>${esc(a.ID_CLIENTE)} · ${esc(a.ZONA || 'sin zona')}${a.FECHA ? ' · ' + esc(txtFecha(a.FECHA)) + ' ' + esc((String(a.FECHA).slice(10).match(/\d{2}:\d{2}/) || [''])[0]) : ''}${a.USUARIO ? ' · ' + esc(String(a.USUARIO).replace(/@.*/, '')) : ''}</small>
-      ${a.OBS ? `<small>${esc(a.OBS)}</small>` : ''}</div><div class="der">${Number(a.MONTO) ? `<b>${soles(a.MONTO)}</b>` : ''}${marcaPend(a)}
-      ${filtro.res === 'NO_ENVIAR' ? `<button class="mini no-imprimir" data-quitar="${esc(a.ID_CLIENTE)}">Quitar marca</button>`
-        : camp === mesCampana() ? `<button class="mini no-imprimir" data-reenviar="${esc(a.ID_CLIENTE)}">${ic('chat')}Reenviar</button>` : ''}</div></a></li>`).join('')
-      || '<li class="vacio">Nadie en este grupo.</li>';
-    $('#rpLista').querySelectorAll('[data-reenviar]').forEach((b) => { b.onclick = (e) => { e.preventDefault(); location.hash = '#/avisos/reenviar:' + b.dataset.reenviar; }; });
-    $('#rpLista').querySelectorAll('[data-quitar]').forEach((b) => { b.onclick = async (e) => {
-      e.preventDefault();
-      if (!(await confirmar('Volverá a aparecer en el recordatorio masivo.', { titulo: '¿Quitar "no desea mensajes"?', si: 'Quitar marca' }))) return;
-      await encolar({ tipo: 'REGISTRAR_AVISO', idCliente: b.dataset.quitar, usuarioLocal: PERFIL.email, datos: { resultado: 'QUITAR_NO_ENVIAR', campana: camp } });
-      vReporteAvisos(camp);
-    }; });
   };
-  vista().querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => { filtro.res = b.dataset.r; kvSet('avisosReporte', filtro);
-    vista().querySelectorAll('[data-r]').forEach((x) => { x.classList.toggle('sel', x === b); x.setAttribute('aria-pressed', x === b); }); pintar(); }; });
+  const pintar = () => {
+    $('#rpChips').innerHTML = Object.entries(grupos).map(([k, [t, col, icn]]) =>
+      `<button type="button" class="chip-mapa c-${col} ${filtro.res === k ? 'sel' : ''}" data-r="${k}" aria-pressed="${filtro.res === k}"><span class="mk mk-${col}">${ic(icn)}</span>${t} <b>${cuenta(k)}</b></button>`).join('');
+    $('#rpChips').querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => { filtro.res = b.dataset.r; kvSet('avisosReporte', filtro); pintar(); }; });
+    $('#rpLista').innerHTML = filas().map((a) => `<li><a href="#/cliente/${esc(a.ID_CLIENTE)}"><div><b>${esc(a.CLIENTE || a.ID_CLIENTE)}</b>
+      <small>${esc(a.ZONA || 'sin zona')}${a.FECHA ? ' · ' + esc(txtFecha(diaLima(a.FECHA))) + ' ' + esc((String(a.FECHA).slice(10).match(/\d{2}:\d{2}/) || [''])[0]) : ''}${a.USUARIO ? ' · ' + esc(String(a.USUARIO).replace(/@.*/, '')) : ''}</small>
+      ${a.OBS ? `<small>${esc(a.OBS)}</small>` : ''}</div><div class="der">${Number(a.MONTO) ? `<b>${soles(a.MONTO)}</b>` : ''}${marcaPend(a)}
+      <button class="mini icono no-imprimir" data-acc="${esc(a.ID_CLIENTE)}" aria-label="Opciones de ${esc(a.CLIENTE || a.ID_CLIENTE)}">${ic('puntos')}</button></div></a></li>`).join('')
+      || '<li class="vacio">Nadie en este grupo.</li>';
+    $('#rpLista').querySelectorAll('[data-acc]').forEach((b) => { b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); acciones(b.dataset.acc); }; });
+  };
+  const rehacer = () => { calcular(); pintar(); };
+  const acciones = (id) => {
+    const c = D.porId[id] || {}, op = [];
+    const marcar = (res, t) => async () => {
+      if (res === 'NO_ENVIAR' && !(await confirmar(`${c.NOMBRES || id} no recibirá más recordatorios por WhatsApp.`, { titulo: '¿No desea mensajes?', si: 'Marcar' }))) return;
+      const x = itemAviso(c, camp);
+      await marcarAviso(id, res, { tipo: x.tipo, campana: camp, monto: x.monto }, 'Marcado desde el reporte');
+      aviso(t); rehacer();
+    };
+    if (filtro.res === 'NO_ENVIAR') op.push({ t: 'Quitar "no desea mensajes"', icono: 'check', fn: async () => {
+      await marcarAviso(id, 'QUITAR_NO_ENVIAR', { campana: camp }); aviso('Volverá a aparecer en el recordatorio.'); rehacer(); } });
+    else if (filtro.res === 'NUMERO') {
+      const n = (nums[id] || {}).TELEFONO || ((nums[id] || {}).OBS || '').replace(/\D/g, '').slice(-9);
+      op.push({ t: 'Corregir el número ahora', icono: 'editar', fn: async () => { if (await corregirNumero(id, /^9\d{8}$/.test(n) ? n : '')) rehacer(); } });
+      op.push({ t: 'Ya está corregido (quitar de la lista)', icono: 'check', fn: async () => { await marcarAviso(id, 'NUMERO_REVISADO', {}, 'Revisado'); aviso('Quitado de la lista.'); rehacer(); } });
+    } else {
+      if (actualCamp && telefonosOk(c).length) op.push({ t: 'Enviar por WhatsApp', icono: 'chat', clase: 'verde', href: '#/avisos/reenviar:' + id });
+      if (filtro.res !== 'ENVIADO') op.push({ t: 'Marcar: sí se envió', icono: 'check', fn: marcar('ENVIADO', 'Marcado como enviado.') });
+      if (filtro.res !== 'SIN_WHATSAPP') op.push({ t: 'Marcar: no tiene WhatsApp', icono: 'alerta', fn: marcar('SIN_WHATSAPP', 'Marcado sin WhatsApp.') });
+      op.push({ t: 'Corregir número', icono: 'celular', fn: async () => { if (await corregirNumero(id)) rehacer(); } });
+      op.push({ t: 'No desea mensajes', icono: 'cerrar', fn: marcar('NO_ENVIAR', 'Marcado: no desea mensajes.') });
+    }
+    op.push({ t: 'Ver la ficha', icono: 'usuario', href: '#/cliente/' + id });
+    menuOpciones(c.NOMBRES || id, op);
+  };
   $('#rpZona').onchange = () => { filtro.zona = $('#rpZona').value; kvSet('avisosReporte', filtro); pintar(); };
   $('#rpCamp').onchange = () => { location.hash = '#/avisos/reporte:' + $('#rpCamp').value; };
   $('#rpImprimir').onclick = () => window.print();
   $('#rpCopiar').onclick = async () => {
-    const txt = `Avisos de cobro ${mesTxt(camp)}\n` + Object.entries(AV_RES).map(([k, [t]]) => `${t}: ${cuenta(k)}`).join('\n') + (cand.length ? `\nFaltan: ${faltan}` : '');
+    const txt = `Avisos de cobro ${mesTxt(camp)}\n` + Object.entries(grupos).map(([k, [t]]) => `${t}: ${cuenta(k)}`).join('\n');
     try { await navigator.clipboard.writeText(txt); aviso('Resumen copiado: péguelo donde quiera.'); } catch (e) { aviso(txt); }
   };
-  REPINTAR = pintar;
+  REPINTAR = rehacer;
   pintar();
 }
 
@@ -3666,7 +3785,8 @@ const CAMPOS_NEGOCIO = [
 ];
 const CAMPOS_COBRO = [['Yape', 'N° Yape', 'numeric'], ['TitularCobro', 'Titular de las cuentas', 'text'], ['BCP', 'Cuenta BCP', 'numeric'], ['BN', 'Cuenta Banco de la Nación', 'numeric']];
 const MENSAJES = [
-  ['MsgRecordatorio', 'Recordatorio antes del vencimiento (WhatsApp)'], ['MsgCobranza', 'Cobranza a quien debe (WhatsApp)'], ['MsgCorte', 'Aviso de corte (WhatsApp)'], ['MensajeRecibo', 'Mensaje al pie del recibo'],
+  ['MsgAvisoPago', 'Al día · aviso de pago', 'RECORDATORIO'], ['MsgAvisoDeuda', 'Con deuda', 'COBRANZA'], ['MsgAvisoCorte', 'Para corte · aviso de corte', 'CORTE'],
+  ['MsgAvisoCortado', 'Cortado', 'CORTADO'], ['MensajeRecibo', 'Mensaje al pie del recibo'],
 ];
 const CAMPOS_MSG = [['DiasSuspension', 'Días entre el vencimiento y la suspensión (0 = el mismo día)', 'numeric']];
 const VARIABLES = [['{DETALLE}', 'meses y montos por servicio (INTERNET / TV CABLE)'], ['{SERVICIO}', 'INTERNET, TV CABLE o INTERNET + TV CABLE'],
@@ -3691,9 +3811,9 @@ function vNegocio(sec) {
       : x[0] === 'BCP' ? '<img src="icons/bancos/bcp-ico.png" alt="" width="40" height="40">' : x[0] === 'BN' ? '<img src="icons/bancos/bn-ico.png" alt="" width="40" height="40">'
       : `<span class="ico-metodo">${ic('usuario')}</span>`}${campo(x)}</div>`).join('')}</div>` : ''}
     ${ver('mensajes') ? `<div class="tarjeta-form">${CAMPOS_MSG.map(campo).join('')}</div>` : ''}
-    ${!ver('mensajes') ? '' : MENSAJES.map(([k, etq]) => `<label>${esc(etq)}<textarea data-k="${k}" rows="${k === 'MensajeRecibo' ? 2 : 7}">${esc(txt(k))}</textarea></label>
+    ${!ver('mensajes') ? '' : MENSAJES.map(([k, etq, tipo]) => seccion('msg_' + k, etq, `<textarea data-k="${k}" rows="${k === 'MensajeRecibo' ? 2 : 10}" aria-label="${esc(etq)}">${esc(txt(k))}</textarea>
       ${k !== 'MensajeRecibo' ? `<div class="chips vars">${VARIABLES.map(([v, d]) => `<button type="button" class="mini" data-var="${v}" data-para="${k}" title="${esc(d)}">${v}</button>`).join('')}</div>
-      <details class="previa"><summary>Vista previa con ${esc(ej.NOMBRES || 'un cliente')}</summary><pre data-previa="${k}"></pre></details>` : ''}`).join('')}
+      <details class="previa"><summary>Vista previa</summary><pre data-previa="${k}" data-tipo="${tipo}"></pre></details>` : ''}`)).join('')}
     <button class="btn grande verde" id="ok">${ic('check')}Guardar cambios</button>
     <a class="btn secundario" href="#/perfil">Cancelar</a></section>`;
   const valor = (k) => (vista().querySelector(`[data-k="${k}"]`) || {}).value || '';
@@ -3701,9 +3821,11 @@ function vNegocio(sec) {
     const k = pre.dataset.previa, guard = cfg[k];
     const temp = Object.assign({}, cfg); CAMPOS_COBRO.concat(CAMPOS_NEGOCIO, CAMPOS_MSG).forEach(([c]) => { if (vista().querySelector(`[data-k="${c}"]`)) temp[c] = valor(c); });
     D.config = Object.assign({}, temp, { [k]: valor(k) });
-    pre.textContent = plantilla(k, ej.ID_CLIENTE);
+    const tipo = pre.dataset.tipo, idEj = (D.clientes.find((c) => tipoAviso(c.ID_CLIENTE) === tipo && Number(detalleCobro(c.ID_CLIENTE, campanaActual()).total) > 0) || {}).ID_CLIENTE || ej.ID_CLIENTE;
+    pre.textContent = plantilla(k, idEj);
     D.config = cfg; cfg[k] = guard;
   });
+  prepararSecciones(vista());
   vista().querySelectorAll('[data-k]').forEach((el) => { el.oninput = previa; });
   vista().querySelectorAll('[data-var]').forEach((b) => { b.onclick = () => {
     const ta = vista().querySelector(`[data-k="${b.dataset.para}"]`), ini = ta.selectionStart ?? ta.value.length, fin = ta.selectionEnd ?? ini;

@@ -79,6 +79,10 @@ export function aplicarPendientes(ops) {
       case 'EDITAR_PPPOE': {
         const p = pp(o.codigoPPPoE); if (p && o.datos && o.datos.titular) Object.assign(p, { TITULAR: String(o.datos.titular).toUpperCase(), _pend: true }); break;
       }
+      case 'EDITAR_CLIENTE': {                        // el celular corregido se ve al instante
+        if (o.idCliente && D.porId[o.idCliente] && o.datos) ['TELEFONO', 'TELEFONO2'].forEach((k) => { if (o.datos[k] !== undefined) D.porId[o.idCliente][k] = o.datos[k]; });
+        break;
+      }
       case 'REGISTRAR_AVISO': {                       // el aviso recién marcado cuenta al instante (lista y reporte)
         const d = o.datos || {};
         D.avisos = D.avisos || [];
@@ -238,10 +242,14 @@ export const pppoeDisponibles = () => D.pppoe.filter((p) => p.ESTADO === 'Dispon
 
 /** Textos por defecto si la plantilla aún no está en la hoja Config. */
 export const MSG_DEFECTO = {
-  // formato del negocio (el que ya usaba a mano): detalle por servicio y mes, cuentas y fechas
-  MsgRecordatorio: 'INTERNET {NEGOCIO}:\nEstimado cliente, le recordamos que se encuentra vigente el pago del servicio de {SERVICIO}\nCorrespondiente al MES.\n{DETALLE}\n👇\n💫Los pagos se realizan de manera presencial o por depósito bancario a nuestro número de cuenta.🫧\n👇\n💳 BCP:\n{BCP}\n💳 YAPE:\n{YAPE}\n💳 BN:\n{BN}\n👇\n💫🪪 A nombre de {TITULAR} 💧\n👇\n✅ *ENVIAR* el voucher y/o constancia de pago por este medio indicando NOMBRES, APELLIDOS Y DNI DEL CLIENTE y el mes que corresponde 🪼\n👇\n🚨 FECHA DE PAGO\n{FPAGO}\n🚨 FECHA DE VENCIMIENTO\n{VENCE}\n🚨 FECHA DE SUSPENSIÓN\n{SUSPENSION}\n👇\n💫 Pague a tiempo, evite el corte del servicio y el pago de S/15.00 por reconexión 🔥💡\n👇\n*NOTA:* Reconexión por suspensión 24 horas posterior al reporte del pago realizado. Si realiza el pago antes de la fecha, solo envíenos su constancia de pago para registrarlo. 🌎',
+  // formato del negocio (el que ya usaba a mano): detalle por servicio y mes, cuentas y fechas. Uno por estado del cliente.
+  MsgAvisoPago: 'INTERNET {NEGOCIO}:\nEstimado cliente, le recordamos que se encuentra vigente el pago del servicio de {SERVICIO}\nCorrespondiente al MES.\n{DETALLE}\n👇\n💫Los pagos se realizan de manera presencial o por depósito bancario a nuestro número de cuenta.🫧\n👇\n💳 BCP:\n{BCP}\n💳 YAPE:\n{YAPE}\n💳 BN:\n{BN}\n👇\n💫🪪 A nombre de {TITULAR} 💧\n👇\n✅ *ENVIAR* el voucher y/o constancia de pago por este medio indicando NOMBRES, APELLIDOS Y DNI DEL CLIENTE y el mes que corresponde 🪼\n👇\n🚨 FECHA DE PAGO\n{FPAGO}\n🚨 FECHA DE VENCIMIENTO\n{VENCE}\n🚨 FECHA DE SUSPENSIÓN\n{SUSPENSION}\n👇\n💫 Pague a tiempo, evite el corte del servicio y el pago de S/15.00 por reconexión 🔥💡\n👇\n*NOTA:* Reconexión por suspensión 24 horas posterior al reporte del pago realizado. Si realiza el pago antes de la fecha, solo envíenos su constancia de pago para registrarlo. 🌎',
+  MsgAvisoDeuda: 'INTERNET {NEGOCIO}:\nEstimado cliente, le recordamos que tiene pagos *PENDIENTES* del servicio de {SERVICIO}\nCorrespondiente a los meses:\n{DETALLE}\n👇\n💫Los pagos se realizan de manera presencial o por depósito bancario a nuestro número de cuenta.🫧\n👇\n💳 BCP:\n{BCP}\n💳 YAPE:\n{YAPE}\n💳 BN:\n{BN}\n👇\n💫🪪 A nombre de {TITULAR} 💧\n👇\n✅ *ENVIAR* el voucher y/o constancia de pago por este medio indicando NOMBRES, APELLIDOS Y DNI DEL CLIENTE y el mes que corresponde 🪼\n👇\n🚨 FECHA DE PAGO\n{FPAGO}\n🚨 FECHA DE VENCIMIENTO\n{VENCE}\n🚨 FECHA DE SUSPENSIÓN\n{SUSPENSION}\n👇\n💫 Regularice su pago y evite el corte del servicio y el pago de S/15.00 por reconexión 🔥💡\n👇\n*NOTA:* Reconexión por suspensión 24 horas posterior al reporte del pago realizado. Si realiza el pago antes de la fecha, solo envíenos su constancia de pago para registrarlo. 🌎',
+  MsgAvisoCorte: 'INTERNET {NEGOCIO}:\n⚠️ *AVISO DE CORTE*\nEstimado cliente, su servicio de {SERVICIO} tiene pagos *VENCIDOS* y será suspendido si no regulariza su pago.\nMeses pendientes:\n{DETALLE}\n👇\n💫Los pagos se realizan de manera presencial o por depósito bancario a nuestro número de cuenta.🫧\n👇\n💳 BCP:\n{BCP}\n💳 YAPE:\n{YAPE}\n💳 BN:\n{BN}\n👇\n💫🪪 A nombre de {TITULAR} 💧\n👇\n✅ *ENVIAR* el voucher y/o constancia de pago por este medio indicando NOMBRES, APELLIDOS Y DNI DEL CLIENTE y el mes que corresponde 🪼\n👇\n🚨 FECHA DE SUSPENSIÓN\n{SUSPENSION}\n👇\n💫 Evite el corte del servicio y el pago de S/15.00 por reconexión 🔥💡\n👇\n*NOTA:* Reconexión por suspensión 24 horas posterior al reporte del pago realizado. Si realiza el pago antes de la fecha, solo envíenos su constancia de pago para registrarlo. 🌎',
+  MsgAvisoCortado: 'INTERNET {NEGOCIO}:\n🔴 *SERVICIO SUSPENDIDO*\nEstimado cliente, su servicio de {SERVICIO} se encuentra suspendido por falta de pago.\nMeses pendientes:\n{DETALLE}\n👇\n💡 Para reactivarlo, pague lo pendiente más S/15.00 por reconexión.\n👇\n💫Los pagos se realizan de manera presencial o por depósito bancario a nuestro número de cuenta.🫧\n👇\n💳 BCP:\n{BCP}\n💳 YAPE:\n{YAPE}\n💳 BN:\n{BN}\n👇\n💫🪪 A nombre de {TITULAR} 💧\n👇\n✅ *ENVIAR* el voucher y/o constancia de pago por este medio indicando NOMBRES, APELLIDOS Y DNI DEL CLIENTE y el mes que corresponde 🪼\n👇\n*NOTA:* Reconexión por suspensión 24 horas posterior al reporte del pago realizado. Si realiza el pago antes de la fecha, solo envíenos su constancia de pago para registrarlo. 🌎',
   DiasSuspension: '0',
 };
+MSG_DEFECTO.MsgRecordatorio = MSG_DEFECTO.MsgAvisoPago;   // clave de la 1.26/1.27 (ya no se ofrece)
 /** El texto de prueba de la 1.26.0 (si quedó guardado en Config) pasa al formato nuevo. */
 const RECORDATORIO_VIEJO = /^Hola \{NOMBRE\}, le saluda \{NEGOCIO\}\.(\\n|\n)Le recordamos que el pago de su servicio de \{MES\}/;
 /** Texto de una plantilla o dato editable: lo guardado en Config o, si está vacío, el de fábrica. */
@@ -256,10 +264,11 @@ const ddmmaaaa = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' 
 const sumarDiasISO = (iso, n) => new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)) + n)).toISOString().slice(0, 10);
 /** Mes que se recuerda en el aviso de pago: desde el día 20, el mes siguiente ("aaaa-mm"). */
 export function campanaActual() { const h = hoyISO(), ym = h.slice(0, 7); return Number(h.slice(8, 10)) >= 20 ? mesSiguiente(ym) : ym; }
-/** "SERVICIO DE INTERNET 20mbp" → "INTERNET"; CATV → "TV CABLE"; plan con ambos → "INTERNET + TV CABLE". */
+/** "SERVICIO DE INTERNET 20mbp" o "BASICO ANTENA" → "INTERNET"; CATV → "TV CABLE"; plan con ambos → "INTERNET + TV CABLE". */
 export const etiquetaServicio = (plan) => {
   const n = nombreServicio(plan).toUpperCase(), tv = /CATV|CABLE|\bTV\b/.test(n), net = /INTERNET/.test(n);
-  return net && tv ? 'INTERNET + TV CABLE' : net ? 'INTERNET' : tv ? 'TV CABLE' : (n.replace(/^SERVICIO\s+(DE\s+)?/, '') || 'SERVICIO');
+  // todo plan que no es de cable es internet (ej. "BASICO ANTENA")
+  return net && tv ? 'INTERNET + TV CABLE' : tv ? 'TV CABLE' : 'INTERNET';
 };
 /**
  * Lo que se le cobra a un cliente en el aviso del mes ym: todo lo pendiente hasta ese mes (también el mes

@@ -806,6 +806,24 @@ i.punto.e-pend { background: var(--c-neutro); }
 .av-paso > span { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--c-ok-solido); color: var(--c-sobre-primario); font-size: var(--t-sm); }
 .av-dos { display: grid; grid-template-columns: 1fr 1fr; gap: var(--e-2); margin: var(--e-2) 0; }
 .av-dos .btn { margin: 0; }
+.av-titulo { display: flex; align-items: center; justify-content: space-between; gap: var(--e-2); }
+.av-titulo h2 { margin: 0; display: flex; align-items: center; gap: var(--e-1); flex-wrap: nowrap; font-size: var(--t-lg); min-width: 0; }
+.av-titulo .mini, .av-tels .mini, .av-ver .mini, .av-nav .mini { display: inline-flex; align-items: center; gap: var(--e-1); min-height: 44px; }
+.av-tels, .av-ver { display: flex; flex-wrap: wrap; gap: var(--e-2); margin: var(--e-2) 0; }
+.av-ver .mini { flex: 1; justify-content: center; }
+.mini.icono { min-width: 44px; justify-content: center; padding-inline: var(--e-2); }
+.av-texto { white-space: pre-line; padding: var(--e-3); border-radius: var(--r-md); background: var(--c-ok-fondo); color: var(--c-tinta); font-size: var(--t-sm); max-height: 50dvh; overflow: auto; margin: 0 0 var(--e-2); }
+.av-fila2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--e-2); }
+.av-cab .chip { font-size: var(--t-xs, 12px); }
+.enlace-ic { display: inline-flex; align-items: center; gap: var(--e-1); min-height: 44px; color: var(--c-enlace); }
+.enlace-ic .ic { width: 18px; height: 18px; }
+/* mapa general a pantalla completa */
+.mapa-env.completo { position: fixed; inset: 0; z-index: calc(var(--z-modal) - 5); background: var(--c-fondo); display: flex; flex-direction: column; padding: var(--e-2); }
+.mapa-env.completo .capas-mapa { margin: 0 0 var(--e-2); }
+.mapa-env.completo .mapa-caja { flex: 1; display: flex; }
+.mapa-env.completo .mapa-general { height: auto; min-height: 0; flex: 1; margin: 0; }
+.btn-mapa.arriba { top: var(--e-3); bottom: auto; }
+body.sin-scroll { overflow: hidden; }
 .av-nav { display: flex; justify-content: space-between; gap: var(--e-2); margin-top: var(--e-3); }
 .av-nav .mini { display: inline-flex; align-items: center; gap: var(--e-1); min-height: 44px; }
 .centro { text-align: center; }
