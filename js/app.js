@@ -6,7 +6,7 @@ import { llamar } from './api.js';
 import { encolar, sincronizarTodo, sincronizarParcial, reaplicarPendientes, iniciarAutoSync, alCambiar, pendientesDeEnvio, siguienteProvisional } from './sync.js';
 import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
-  cargosDe, repartir, pppoeDisponibles, plantilla, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
+  cargosDe, repartir, pppoeDisponibles, plantilla, MSG_DEFECTO, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
   nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas, serviciosDuo, detalleInstalacion,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
@@ -139,7 +139,7 @@ function refrescarSiCorresponde() {
   const h = location.hash || '#/';
   if ($('#modal')) return;
   if (REPINTAR) { try { REPINTAR(); } catch (e) { /* la vista se repinta en la próxima visita */ } return; }
-  if (/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|config|plan|pausa|orden|negocio|ajustar|convenio\/|nuevoserv|editserv|nuevaorden|mapa|perfil|recordatorios)/.test(h)) return;   // no interrumpir un formulario
+  if (/^#\/(cobrar|corte|reactivar|nuevo|editar|asignar|config|plan|pausa|orden|negocio|ajustar|convenio\/|nuevoserv|editserv|nuevaorden|mapa|perfil|recordatorios|avisos)/.test(h)) return;   // no interrumpir un formulario
   const y = window.scrollY, act = document.activeElement, idAct = act && act.id;
   const valores = [...vista().querySelectorAll('input[id],select[id]')].filter((x) => x.type !== 'checkbox' && x.value).map((x) => [x.id, x.value]);
   Promise.resolve(enrutar({ conservar: true })).then(() => {
@@ -179,7 +179,7 @@ function enrutar(op = {}) {
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
     hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, ajustar: vAjustar, ecuenta: vEstadoCuenta, convenio: vConvenio, convenios: vConvenios, ordenserv: vOrdenServicio, nuevaorden: vNuevaOrden, nuevoserv: vNuevoServicio, editserv: vEditarServicio, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos, negocio: vNegocio,
-    mas: vMas, mapa: vMapaGeneral, guia: vGuia, perfil: vPerfil, recordatorios: vRecordatorios, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
+    mas: vMas, mapa: vMapaGeneral, guia: vGuia, avisos: vAvisos, perfil: vPerfil, recordatorios: vRecordatorios, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   if (!op.conservar) { window.scrollTo(0, 0); cerrarModal(); }
   return Promise.resolve(v(decodeURIComponent(arg || ''))).catch((e) => { vista().innerHTML = `<p class="error">${esc(e.message)}</p>`; });
 }
@@ -232,6 +232,7 @@ async function vInicio() {
       { href: '#/nuevo', icono: 'nuevoCliente', t: 'Nuevo cliente', color: 'verde' },
       { href: '#/nuevaorden/libre', icono: 'documento', t: 'Nueva orden', color: 'azul' },
       { href: '#/mapa', icono: 'mapa', t: 'Mapa general', color: 'cian' },
+      { href: '#/avisos', icono: 'chat', t: 'Recordatorio masivo', color: 'verde' },
       { href: '#/dashboard', icono: 'grafico', t: 'Dashboard', color: 'violeta' },
       { href: '#/movimientos', icono: 'reloj', t: 'Movimientos', color: 'cian' },
     ], 'dos')}
@@ -1282,7 +1283,7 @@ async function vCola() {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
       const nombres = { EDITAR_SERVICIO: 'Corregir servicio', GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', AJUSTAR_CARGOS: 'Ajuste de cuenta', CREAR_CONVENIO: 'Convenio / castigo', REVERTIR_CONVENIO: 'Revertir convenio', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
-        BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE' };
+        BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE', REGISTRAR_AVISO: 'Aviso WhatsApp' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
         : /PPPOE/.test(o.tipo) ? o.codigoPPPoE : (cli.NOMBRES || o.idServ || '');
       const titulo = o.tipo === 'COBRO' ? `Cobro ${soles(o.monto)} · ${cli.NOMBRES || o.idCliente}` : `${nombres[o.tipo] || o.tipo} · ${detalle || ''}`;
@@ -1672,6 +1673,7 @@ function vMas() {
       { href: '#/nuevo', icono: 'nuevoCliente', t: 'Nuevo cliente', sub: 'Registro por pasos', color: 'verde' },
       { href: '#/ordenes', icono: 'lista', t: 'Órdenes y rutas', sub: 'Pendientes por zona', color: 'azul' },
       { href: '#/mapa', icono: 'mapa', t: 'Mapa general', sub: 'Clientes y órdenes por color', color: 'cian' },
+      { href: '#/avisos', icono: 'chat', t: 'Recordatorio masivo', sub: 'WhatsApp uno por uno + reporte', color: 'verde' },
       { href: '#/cortar', icono: 'cortar', t: 'A cortar', sub: '30 días o más', color: 'rojo' },
       { href: '#/convenios', icono: 'calculadora', t: 'Convenios', sub: 'Cuotas y castigos', color: 'ambar' },
     ], 'dos')}
@@ -1706,6 +1708,201 @@ async function vPerfil() {
       { href: '#/guia', icono: 'info', t: 'Cómo funciona', sub: 'Colores, íconos y señal', color: 'azul' },
       { href: '#/mapa', icono: 'mapa', t: 'Mapa general', sub: 'Clientes y órdenes', color: 'cian' },
     ], 'dos')}</section>`;
+}
+
+// ---- RECORDATORIO MASIVO POR WHATSAPP (envío guiado, uno por uno) + REPORTE --------------------
+// No se automatiza WhatsApp: la app abre el chat con el mensaje escrito y el técnico toca "Enviar".
+// Para cuidar el número: límite diario, pausa entre mensajes, saludo variado, sin enlaces y nunca
+// se repite a quien ya se avisó en la campaña (ni a quien pidió no recibir mensajes).
+const MESES_LARGO = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SETIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+const AV_RES = {
+  ENVIADO: ['Enviados', 'verde', 'check'], SIN_WHATSAPP: ['Sin WhatsApp', 'ambar', 'alerta'], OMITIDO: ['Saltados', 'gris', 'flecha'],
+  NO_ENVIAR: ['No desean mensajes', 'rojo', 'cerrar'],
+};
+const AYUDA_MASIVO = 'La app prepara la lista y el mensaje de cada cliente. Usted toca "Abrir WhatsApp", revisa y toca ENVIAR en WhatsApp. Al volver, marque qué pasó.\n\n' +
+  'Para que WhatsApp no bloquee su número:\n• Se envía uno por uno, a mano (nada automático).\n• Hay un límite por día en este celular (cámbielo abajo; recomendado 30–40).\n' +
+  '• Después de cada envío hay una pausa corta.\n• Cada mensaje lleva el nombre y monto del cliente y el saludo cambia.\n• Sin enlaces en el mensaje.\n' +
+  '• Si alguien pide no recibir mensajes, márquelo: nunca más se le ofrecerá.\n• Pida a los clientes que guarden su número: así WhatsApp lo ve como contacto conocido.\n\n' +
+  'Nadie recibe dos veces el mismo recordatorio: lo que marcan todos los técnicos se junta al sincronizar.';
+const SALUDOS = ['Hola', 'Buen día', 'Saludos', 'Hola, buen día', 'Estimado(a)'];
+/** Cambia el saludo inicial según el cliente (mensajes no idénticos). */
+const variarSaludo = (msg, n) => String(msg).replace(/^Hola\b/, SALUDOS[n % SALUDOS.length]);
+const mesTxt = (ym) => MESES_LARGO[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4);
+const ymMas = (ym, n) => { const d = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1 + n, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
+/** Mes que se recuerda: desde el día 20, el mes siguiente. */
+const mesCampana = () => { const h = hoyISO(); return Number(h.slice(8, 10)) >= 20 ? ymMas(h.slice(0, 7), 1) : h.slice(0, 7); };
+const telefonosOk = (c) => [c.TELEFONO, c.TELEFONO2].map((t) => String(t || '').replace(/\D/g, '').slice(-9)).filter((t) => /^9\d{8}$/.test(t));
+/** Clientes que no quieren mensajes (la última marca de cada uno manda). */
+function noDesean() {
+  const ult = {};
+  (D.avisos || []).filter((a) => a.RESULTADO === 'NO_ENVIAR' || a.RESULTADO === 'QUITAR_NO_ENVIAR')
+    .sort((a, b) => String(a.FECHA).localeCompare(String(b.FECHA))).forEach((a) => { ult[a.ID_CLIENTE] = a; });
+  return new Set(Object.values(ult).filter((a) => a.RESULTADO === 'NO_ENVIAR').map((a) => a.ID_CLIENTE));
+}
+/** Último resultado de cada cliente en la campaña. */
+function resultadosCampana(camp) {
+  const r = {};
+  (D.avisos || []).filter((a) => a.CAMPANA === camp && a.RESULTADO !== 'QUITAR_NO_ENVIAR')
+    .sort((a, b) => String(a.FECHA).localeCompare(String(b.FECHA))).forEach((a) => { r[a.ID_CLIENTE] = a; });
+  return r;
+}
+/**
+ * A quién se le puede avisar en el mes ym: servicio activo/moroso con cuota de ese mes por pagar (o deuda vencida),
+ * con celular válido. Al día → recordatorio; con deuda vencida → mensaje de cobranza.
+ */
+function candidatosAviso(ym) {
+  const no = noDesean(), lista = [];
+  D.clientes.forEach((c) => {
+    const r = D.resumen[c.ID_CLIENTE] || {};
+    if (!['Activo', 'Moroso'].includes(r.ESTADO) || no.has(c.ID_CLIENTE)) return;
+    const tels = telefonosOk(c);
+    const delMes = cargosDe(c.ID_CLIENTE).filter((k) => String(k.PERIODO).slice(0, 7) === ym);
+    const saldoMes = r2(delMes.reduce((t, k) => t + Number(k.SALDO), 0)), deuda = Number(r.DEUDA_VENCIDA) || 0;
+    if (saldoMes <= 0 && deuda <= 0) return;
+    const vence = delMes.map((k) => String(k.VENCE || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
+    lista.push({ c, r, tels, tipo: deuda > 0 ? 'COBRANZA' : 'RECORDATORIO', saldoMes, deuda, vence, monto: r2(deuda > 0 ? deuda : saldoMes) });
+  });
+  return lista.sort((a, b) => String(a.c.ZONA).localeCompare(String(b.c.ZONA)) || String(a.c.NOMBRES).localeCompare(String(b.c.NOMBRES)));
+}
+
+async function vAvisos(arg) {
+  if (arg === 'reporte' || /^reporte:/.test(arg || '')) return vReporteAvisos(String(arg).split(':')[1]);
+  const ym = mesCampana(), camp = ym;
+  const cand = candidatosAviso(ym), hechos = resultadosCampana(camp);
+  const f = Object.assign({ zona: '', tipos: { RECORDATORIO: true, COBRANZA: true }, limite: 40, saltados: false }, (await kvGet('avisosFiltro')) || {});
+  const yo = PERFIL.email, hoy = hoyISO();
+  const enviadosHoy = () => (D.avisos || []).filter((a) => a.RESULTADO === 'ENVIADO' && String(a.FECHA).slice(0, 10) === hoy && (!a.USUARIO || a.USUARIO === yo)).length;
+  const zonas = [...new Set(cand.map((x) => x.c.ZONA).filter(Boolean))].sort();
+  const pendientes = () => cand.filter((x) => { const h = resultadosCampana(camp)[x.c.ID_CLIENTE];
+    return (!h || (f.saltados && h.RESULTADO === 'OMITIDO')) && f.tipos[x.tipo] && (!f.zona || x.c.ZONA === f.zona); });
+  const sinCel = cand.filter((x) => !x.tels.length).length;
+  vista().innerHTML = `<section class="form"><h2 class="tit-ic">${ic('chat')}Recordatorio masivo ${ayuda('Cómo se envía sin arriesgar el número', AYUDA_MASIVO)}</h2>
+    ${!D.config.Yape && !D.config.BCP && !D.config.BN ? `<p class="aviso error">${ic('alerta')}<span>Faltan las cuentas de cobro (Yape, BCP, B. Nación): el mensaje saldría sin ellas. <a href="#/negocio/cobro">Completarlas</a>.</span></p>` : ''}
+    <p class="globo">${ic('calendario')}<span>Pago de <b>${esc(mesTxt(ym))}</b> · campaña ${esc(camp)}. Ya marcados: <b>${Object.keys(hechos).length}</b>.</span></p>
+    <div class="tarjeta-form"><h3 class="tit-ic">${ic('buscar')}A quiénes</h3>
+      <div class="chips-mapa" role="group" aria-label="Tipo de mensaje">
+        <button type="button" class="chip-mapa c-verde ${f.tipos.RECORDATORIO ? 'sel' : ''}" data-tipo="RECORDATORIO" aria-pressed="${!!f.tipos.RECORDATORIO}"><span class="mk mk-verde">${ic('check')}</span>Al día · recordatorio</button>
+        <button type="button" class="chip-mapa c-ambar ${f.tipos.COBRANZA ? 'sel' : ''}" data-tipo="COBRANZA" aria-pressed="${!!f.tipos.COBRANZA}"><span class="mk mk-ambar">${ic('alerta')}</span>Con deuda · cobranza</button></div>
+      <label class="fila-zona">Zona<select id="avZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === f.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
+      <label class="check"><input type="checkbox" id="avSalt" ${f.saltados ? 'checked' : ''}> Volver a mostrar los que salté</label>
+      <label class="fila-zona">Límite por día en este celular<input id="avLim" type="number" min="5" max="80" step="5" value="${Number(f.limite) || 40}" inputmode="numeric"></label>
+      ${sinCel ? `<p class="sub">${sinCel} cliente(s) no tienen un celular válido: se saltan solos (corríjalo en su ficha).</p>` : ''}</div>
+    <div id="avCaja"></div>
+    <a class="btn secundario" href="#/avisos/reporte">${ic('lista')}Ver reporte de enviados</a>
+    <a class="btn secundario" href="#/negocio/mensajes">${ic('editar')}Cambiar el texto de los mensajes</a></section>`;
+  const guardarF = () => kvSet('avisosFiltro', f);
+  vista().querySelectorAll('[data-tipo]').forEach((b) => { b.onclick = () => { f.tipos[b.dataset.tipo] = !f.tipos[b.dataset.tipo];
+    b.classList.toggle('sel', f.tipos[b.dataset.tipo]); b.setAttribute('aria-pressed', f.tipos[b.dataset.tipo]); guardarF(); i = 0; pintar(); }; });
+  $('#avZona').onchange = () => { f.zona = $('#avZona').value; guardarF(); i = 0; pintar(); };
+  $('#avSalt').onchange = () => { f.saltados = $('#avSalt').checked; guardarF(); i = 0; pintar(); };
+  $('#avLim').onchange = () => { f.limite = Math.min(80, Math.max(5, Number($('#avLim').value) || 40)); $('#avLim').value = f.limite; guardarF(); pintar(); };
+  let i = 0, abierto = false, espera = 0, reloj = null, tel = '';
+  function pintar() {
+    clearInterval(reloj);
+    const lista = pendientes().filter((x) => x.tels.length), env = enviadosHoy(), lim = Number(f.limite) || 40;
+    const caja = $('#avCaja');
+    if (!caja) return;
+    if (!lista.length) { caja.innerHTML = `<div class="tarjeta-form centro"><span class="mk mk-verde grande">${ic('check')}</span><p><b>No queda nadie por avisar</b> con estos filtros.</p></div>`; return; }
+    if (i >= lista.length) i = 0;
+    const x = lista[i], c = x.c;
+    tel = x.tels.includes(tel) ? tel : x.tels[0];
+    const extra = { mes: mesTxt(ym), monto: x.tipo === 'COBRANZA' ? x.deuda : x.saldoMes, vence: x.vence };
+    const msg = variarSaludo(plantilla(x.tipo === 'COBRANZA' ? 'MsgCobranza' : 'MsgRecordatorio', c.ID_CLIENTE, extra), Number(String(c.ID_CLIENTE).replace(/\D/g, '')) || i);
+    const tope = env >= lim;
+    caja.innerHTML = `<div class="av-progreso"><span><b>${lista.length}</b> por avisar</span><span class="${tope ? 'error' : ''}">Hoy: <b>${env}</b> de ${lim}</span></div>
+      <div class="barra"><i class="${tope ? 'peligro' : ''}" style="width:${Math.min(100, Math.round(env / lim * 100))}%"></i></div>
+      <div class="tarjeta-form av-tarjeta">
+        <div class="av-cab"><span class="mk mk-${x.tipo === 'COBRANZA' ? 'ambar' : 'verde'}">${ic(x.tipo === 'COBRANZA' ? 'alerta' : 'check')}</span>
+          <div><b>${esc(c.NOMBRES)}</b><small>${esc(c.ID_CLIENTE)} · ${esc(c.ZONA || 'sin zona')}</small>
+          <small>${x.tipo === 'COBRANZA' ? `Debe <b>${soles(x.deuda)}</b> (${esc(x.r.MESES_ADEUDA || 0)} mes/es)` : `Paga <b>${soles(x.saldoMes)}</b>${x.vence ? ' · vence ' + esc(txtFecha(x.vence)) : ''}`}</small></div></div>
+        ${x.tels.length > 1 ? `<div class="chips-mapa">${x.tels.map((t) => `<button type="button" class="mini ${t === tel ? 'sel' : ''}" data-tel="${t}" aria-pressed="${t === tel}">${ic('celular')}${t}</button>`).join('')}</div>` : `<p class="sub etq-ic">${ic('celular')}${esc(tel)}</p>`}
+        <details class="av-msg"><summary>Ver el mensaje</summary><p class="mensaje">${esc(msg)}</p></details>
+        ${tope ? `<p class="aviso error">${ic('alerta')}<span>Llegó al límite de hoy en este celular. Para cuidar su número, siga mañana (o súbalo con cuidado arriba).</span></p>`
+          : !abierto ? `<button class="btn grande verde" id="avAbrir" ${espera ? 'disabled' : ''}>${ic('chat')}${espera ? `Espere ${espera} s…` : 'Abrir WhatsApp'}</button>
+            ${espera ? `<p class="sub centro">Pausa entre mensajes para que WhatsApp no lo vea como envío masivo.</p>` : ''}`
+          : `<p class="globo">${ic('info')}<span>¿Qué pasó en WhatsApp?</span></p>
+            <div class="av-resultados">
+              <button class="btn verde" data-res="ENVIADO">${ic('check')}Lo envié</button>
+              <button class="btn" data-res="SIN_WHATSAPP">${ic('alerta')}No tiene WhatsApp</button>
+              <button class="btn" data-res="NO_ENVIAR">${ic('cerrar')}No desea mensajes</button>
+              <button class="btn secundario" id="avOtra">${ic('chat')}Abrir otra vez</button></div>`}
+        <div class="av-nav"><button class="mini" id="avAnt" ${i ? '' : 'disabled'}>${ic('atras')}Anterior</button>
+          <button class="mini" data-res="OMITIDO">Saltar${ic('flecha')}</button></div></div>`;
+    caja.querySelectorAll('[data-tel]').forEach((b) => { b.onclick = () => { tel = b.dataset.tel; pintar(); }; });
+    const abrir = () => {
+      if (/https?:\/\//i.test(msg) && !abierto) aviso('El mensaje tiene un enlace: WhatsApp revisa más los mensajes con enlaces.', 'error');
+      const url = enlaceWhatsApp(tel, msg);
+      if (!url) return aviso('Número de celular inválido.', 'error');
+      abierto = true; window.open(url, '_blank', 'noopener'); pintar();
+    };
+    if ($('#avAbrir')) $('#avAbrir').onclick = abrir;
+    if ($('#avOtra')) $('#avOtra').onclick = abrir;
+    if ($('#avAnt')) $('#avAnt').onclick = () => { i = Math.max(0, i - 1); abierto = false; pintar(); };
+    caja.querySelectorAll('[data-res]').forEach((b) => { b.onclick = async () => {
+      const res = b.dataset.res;
+      if (res === 'NO_ENVIAR' && !(await confirmar(`${c.NOMBRES} no recibirá más recordatorios por WhatsApp (se puede quitar la marca en el reporte).`, { titulo: '¿No desea mensajes?', si: 'Marcar' }))) return;
+      await encolar({ tipo: 'REGISTRAR_AVISO', idCliente: c.ID_CLIENTE, usuarioLocal: yo,
+        motivo: res === 'OMITIDO' && abierto ? 'Abrió WhatsApp y lo saltó' : '',
+        datos: { resultado: res, tipo: x.tipo, campana: camp, telefono: tel, monto: extra.monto } });
+      abierto = false; tel = '';
+      if (res === 'ENVIADO') { espera = 15 + Math.floor(Math.random() * 16); reloj = null; }
+      pintar();
+      if (espera) reloj = setInterval(() => { espera--; const btn = $('#avAbrir'); if (!btn) { clearInterval(reloj); espera = 0; return; }
+        if (espera <= 0) { clearInterval(reloj); espera = 0; pintar(); } else btn.innerHTML = `${ic('chat')}Espere ${espera} s…`; }, 1000);
+    }; });
+  }
+  pintar();
+}
+
+/** Reporte: a quién se envió, quién no tiene WhatsApp, a quién se saltó y quién no desea mensajes. */
+async function vReporteAvisos(campSel) {
+  const camps = [...new Set((D.avisos || []).map((a) => a.CAMPANA).filter(Boolean).concat([mesCampana()]))].sort().reverse();
+  const camp = campSel || camps[0];
+  const filtro = Object.assign({ res: 'ENVIADO', zona: '' }, (await kvGet('avisosReporte')) || {});
+  const r = resultadosCampana(camp), todos = Object.values(r);
+  const cand = camp === mesCampana() ? candidatosAviso(camp) : [];
+  const faltan = cand.filter((x) => !r[x.c.ID_CLIENTE]).length;
+  const no = noDesean();
+  const cuenta = (k) => (k === 'NO_ENVIAR' ? no.size : todos.filter((a) => a.RESULTADO === k).length);
+  const zonas = [...new Set(todos.map((a) => a.ZONA).filter(Boolean))].sort();
+  vista().innerHTML = `<section><a class="volver no-imprimir" href="#/avisos">${ic('atras')}Recordatorio masivo</a>
+    <h2 class="tit-ic">${ic('lista')}Reporte de avisos ${ayuda('Reporte', 'Muestra el último resultado marcado para cada cliente en la campaña (mes del pago).\nIncluye lo de todos los técnicos después de sincronizar. Lo marcado en este celular y aún no enviado lleva "por enviar".\n"Faltan" son los clientes que todavía no tienen ningún resultado.')}</h2>
+    <div class="filtros no-imprimir"><label>Campaña<select id="rpCamp">${camps.map((k) => `<option value="${esc(k)}" ${k === camp ? 'selected' : ''}>${esc(mesTxt(k))}</option>`).join('')}</select></label>
+      <label>Zona<select id="rpZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === filtro.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label></div>
+    <div class="chips-mapa no-imprimir" role="group" aria-label="Resultado">${Object.entries(AV_RES).map(([k, [t, col, icn]]) =>
+      `<button type="button" class="chip-mapa c-${col} ${filtro.res === k ? 'sel' : ''}" data-r="${k}" aria-pressed="${filtro.res === k}"><span class="mk mk-${col}">${ic(icn)}</span>${t} <b>${cuenta(k)}</b></button>`).join('')}
+      ${cand.length ? `<span class="chip-mapa sel" aria-label="Faltan"><span class="mk mk-azul">${ic('reloj')}</span>Faltan <b>${faltan}</b></span>` : ''}</div>
+    <h3 class="solo-imprimir">${esc(D.config.Negocio || 'D@NDINET')} · Avisos de ${esc(mesTxt(camp))}</h3>
+    <ul class="lista" id="rpLista"></ul>
+    <div class="botones no-imprimir"><button class="btn" id="rpCopiar">${ic('compartir')}Copiar resumen</button><button class="btn" id="rpImprimir">${ic('descargar')}Imprimir / PDF</button></div></section>`;
+  const pintar = () => {
+    const lista = (filtro.res === 'NO_ENVIAR' ? [...no].map((id) => { const c = D.porId[id] || {};
+        return (D.avisos || []).filter((a) => a.ID_CLIENTE === id && a.RESULTADO === 'NO_ENVIAR').pop() || { ID_CLIENTE: id, CLIENTE: c.NOMBRES, ZONA: c.ZONA }; })
+      : todos.filter((a) => a.RESULTADO === filtro.res)).filter((a) => !filtro.zona || a.ZONA === filtro.zona)
+      .sort((a, b) => String(a.ZONA).localeCompare(String(b.ZONA)) || String(a.CLIENTE).localeCompare(String(b.CLIENTE)));
+    $('#rpLista').innerHTML = lista.map((a) => `<li><a href="#/cliente/${esc(a.ID_CLIENTE)}"><div><b>${esc(a.CLIENTE || a.ID_CLIENTE)}</b>
+      <small>${esc(a.ID_CLIENTE)} · ${esc(a.ZONA || 'sin zona')}${a.FECHA ? ' · ' + esc(txtFecha(a.FECHA)) + ' ' + esc((String(a.FECHA).slice(10).match(/\d{2}:\d{2}/) || [''])[0]) : ''}${a.USUARIO ? ' · ' + esc(String(a.USUARIO).replace(/@.*/, '')) : ''}</small>
+      ${a.OBS ? `<small>${esc(a.OBS)}</small>` : ''}</div><div class="der">${Number(a.MONTO) ? `<b>${soles(a.MONTO)}</b>` : ''}${marcaPend(a)}
+      ${filtro.res === 'NO_ENVIAR' ? `<button class="mini no-imprimir" data-quitar="${esc(a.ID_CLIENTE)}">Quitar marca</button>` : ''}</div></a></li>`).join('')
+      || '<li class="vacio">Nadie en este grupo.</li>';
+    $('#rpLista').querySelectorAll('[data-quitar]').forEach((b) => { b.onclick = async (e) => {
+      e.preventDefault();
+      if (!(await confirmar('Volverá a aparecer en el recordatorio masivo.', { titulo: '¿Quitar "no desea mensajes"?', si: 'Quitar marca' }))) return;
+      await encolar({ tipo: 'REGISTRAR_AVISO', idCliente: b.dataset.quitar, usuarioLocal: PERFIL.email, datos: { resultado: 'QUITAR_NO_ENVIAR', campana: camp } });
+      vReporteAvisos(camp);
+    }; });
+  };
+  vista().querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => { filtro.res = b.dataset.r; kvSet('avisosReporte', filtro);
+    vista().querySelectorAll('[data-r]').forEach((x) => { x.classList.toggle('sel', x === b); x.setAttribute('aria-pressed', x === b); }); pintar(); }; });
+  $('#rpZona').onchange = () => { filtro.zona = $('#rpZona').value; kvSet('avisosReporte', filtro); pintar(); };
+  $('#rpCamp').onchange = () => { location.hash = '#/avisos/reporte:' + $('#rpCamp').value; };
+  $('#rpImprimir').onclick = () => window.print();
+  $('#rpCopiar').onclick = async () => {
+    const txt = `Avisos de cobro ${mesTxt(camp)}\n` + Object.entries(AV_RES).map(([k, [t]]) => `${t}: ${cuenta(k)}`).join('\n') + (cand.length ? `\nFaltan: ${faltan}` : '');
+    try { await navigator.clipboard.writeText(txt); aviso('Resumen copiado: péguelo donde quiera.'); } catch (e) { aviso(txt); }
+  };
+  REPINTAR = pintar;
+  pintar();
 }
 
 // ---- CÓMO FUNCIONA: guía corta para el técnico (dibujos y colores, poco texto) --------------
@@ -3402,13 +3599,14 @@ const CAMPOS_NEGOCIO = [
 ];
 const CAMPOS_COBRO = [['Yape', 'N° Yape', 'numeric'], ['TitularCobro', 'Titular de las cuentas', 'text'], ['BCP', 'Cuenta BCP', 'numeric'], ['BN', 'Cuenta Banco de la Nación', 'numeric']];
 const MENSAJES = [
-  ['MsgCobranza', 'Recordatorio de pago (WhatsApp)'], ['MsgCorte', 'Aviso de corte (WhatsApp)'], ['MensajeRecibo', 'Mensaje al pie del recibo'],
+  ['MsgRecordatorio', 'Recordatorio antes del vencimiento (WhatsApp)'], ['MsgCobranza', 'Cobranza a quien debe (WhatsApp)'], ['MsgCorte', 'Aviso de corte (WhatsApp)'], ['MensajeRecibo', 'Mensaje al pie del recibo'],
 ];
 const VARIABLES = [['{NOMBRE}', 'nombre'], ['{DEUDA}', 'deuda'], ['{MESES}', 'meses'], ['{PERIODOS}', 'meses que debe'], ['{DIA}', 'día de pago'],
-  ['{YAPE}', 'Yape'], ['{TITULAR}', 'titular'], ['{BCP}', 'BCP'], ['{BN}', 'B. Nación'], ['{NEGOCIO}', 'negocio']];
+  ['{YAPE}', 'Yape'], ['{TITULAR}', 'titular'], ['{BCP}', 'BCP'], ['{BN}', 'B. Nación'], ['{NEGOCIO}', 'negocio'],
+  ['{MES}', 'mes del pago (recordatorio)'], ['{MONTO}', 'monto del mes (recordatorio)'], ['{VENCE}', 'fecha de vencimiento (recordatorio)']];
 
 function vNegocio(sec) {
-  const cfg = D.config, txt = (k) => String(cfg[k] || '').replace(/\\n/g, '\n');
+  const cfg = D.config, txt = (k) => String(cfg[k] || MSG_DEFECTO[k] || '').replace(/\\n/g, '\n');
   const campo = ([k, etq, tipo]) => `<label>${esc(etq)}<input data-k="${k}" value="${esc(txt(k))}" ${tipo === 'numeric' ? 'inputmode="numeric"' : tipo === 'email' ? 'type="email"' : ''} autocomplete="off"></label>`;
   // cliente de ejemplo para la vista previa: el primero con deuda
   const ej = Object.values(D.resumen).find((r) => Number(r.DEUDA_VENCIDA) > 0) || Object.values(D.resumen)[0] || {};

@@ -28,6 +28,7 @@ export function aplicar(s) {
   D.histPPPoE = aObjetos(s.histPPPoE);
   D.suspensiones = aObjetos(s.suspensiones);
   D.ajustes = aObjetos(s.ajustes);
+  D.avisos = aObjetos(s.avisos);                   // avisos de cobro por WhatsApp (desde la v1.26)
   D.convenios = aObjetos(s.convenios);             // convenios de pago y castigos (desde la v1.19)                 // ajustes de cuenta de los últimos 13 meses (desde la v1.18)
   // órdenes de trabajo / hojas de ruta (desde la v1.11); DATOS y SNAPSHOT vienen como texto JSON
   const json = (t) => { try { return JSON.parse(t || '{}'); } catch (e) { return {}; } };
@@ -77,6 +78,14 @@ export function aplicarPendientes(ops) {
       }
       case 'EDITAR_PPPOE': {
         const p = pp(o.codigoPPPoE); if (p && o.datos && o.datos.titular) Object.assign(p, { TITULAR: String(o.datos.titular).toUpperCase(), _pend: true }); break;
+      }
+      case 'REGISTRAR_AVISO': {                       // el aviso recién marcado cuenta al instante (lista y reporte)
+        const d = o.datos || {};
+        D.avisos = D.avisos || [];
+        if (!D.avisos.some((a) => a.ID_SOLICITUD === o.idSolicitud)) D.avisos.push({ ID_AVISO: '', FECHA: o.fDispositivo, ID_CLIENTE: o.idCliente,
+          CLIENTE: cli.NOMBRES || '', ZONA: cli.ZONA || '', CAMPANA: d.campana || '', TIPO: d.tipo || '', RESULTADO: d.resultado || '',
+          MONTO: d.monto || 0, USUARIO: o.usuarioLocal || '', OBS: o.motivo || '', ID_SOLICITUD: o.idSolicitud, _pend: true });
+        break;
       }
       case 'AGREGAR_PPPOE':
         if (o.codigoPPPoE && !pp(o.codigoPPPoE)) D.pppoe.push({ CODIGO: o.codigoPPPoE, TITULAR: String((o.datos && o.datos.titular) || '').toUpperCase(), ESTADO: 'Disponible', _pend: true });
@@ -227,16 +236,30 @@ export function repartir(cargos, monto) {
 
 export const pppoeDisponibles = () => D.pppoe.filter((p) => p.ESTADO === 'Disponible').map((p) => p.CODIGO);
 
-/** Reemplaza los marcadores de las plantillas de WhatsApp. */
-export function plantilla(clave, idCliente) {
+/** Textos por defecto si la plantilla aún no está en la hoja Config. */
+export const MSG_DEFECTO = {
+  MsgRecordatorio: 'Hola {NOMBRE}, le saluda {NEGOCIO}.\\nLe recordamos que el pago de su servicio de {MES} es {MONTO} y vence el {VENCE}.\\n' +
+    'Puede pagar por Yape {YAPE} ({TITULAR}), BCP {BCP} o Banco de la Nación {BN}.\\nSi ya pagó, por favor ignore este mensaje. ¡Gracias por su preferencia!',
+};
+
+/**
+ * Reemplaza los marcadores de las plantillas de WhatsApp.
+ * extra (opcional): { mes: 'NOVIEMBRE 2026', monto, vence: 'aaaa-mm-dd' } para {MES} {MONTO} {VENCE}.
+ */
+export function plantilla(clave, idCliente, extra = {}) {
   const c = D.porId[idCliente] || {}, r = D.resumen[idCliente] || {}, cfg = D.config;
   // un mes con INTERNET y CATV se nombra una sola vez
   const periodos = [...new Set(cargosDe(idCliente).filter((k) => Number(k.DIAS_ATRASO) > 0).map((k) => txtPeriodo(k.PERIODO)))].join(', ');
-  return String(cfg[clave] || '').replace(/\\n/g, '\n')
+  const dia = Number(c.DIA_VENC) || cfg.DiaVenc || 4;
+  return String(cfg[clave] || MSG_DEFECTO[clave] || '').replace(/\\n/g, '\n')
+    .replace(/{MES}/g, extra.mes || '').replace(/{MONTO}/g, soles(extra.monto !== undefined ? extra.monto : r.DEUDA_VENCIDA))
+    .replace(/{VENCE}/g, extra.vence ? txtFecha(extra.vence) : 'día ' + dia)
     .replace(/{NOMBRE}/g, c.NOMBRES || '').replace(/{DEUDA}/g, soles(r.DEUDA_VENCIDA)).replace(/{MESES}/g, r.MESES_ADEUDA || 0)
-    .replace(/{PERIODOS}/g, periodos || '-').replace(/{DIA}/g, cfg.DiaVenc || 4).replace(/{YAPE}/g, cfg.Yape || '')
+    .replace(/{PERIODOS}/g, periodos || '-').replace(/{DIA}/g, dia).replace(/{YAPE}/g, cfg.Yape || '')
     .replace(/{TITULAR}/g, cfg.TitularCobro || '').replace(/{BCP}/g, cfg.BCP || '').replace(/{BN}/g, cfg.BN || '')
-    .replace(/{NEGOCIO}/g, cfg.Negocio || 'D@NDINET');
+    .replace(/{NEGOCIO}/g, cfg.Negocio || 'D@NDINET')
+    // una cuenta de cobro vacía no deja un renglón suelto ("BCP:" sin número)
+    .split('\n').filter((l) => !/:\s*(\(\s*\))?\s*$/.test(l)).join('\n');
 }
 
 export function enlaceWhatsApp(telefono, mensaje) {

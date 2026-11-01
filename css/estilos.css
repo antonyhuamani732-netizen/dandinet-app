@@ -789,6 +789,28 @@ i.punto.e-pend { background: var(--c-neutro); }
 .guia-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--e-2); }
 .guia-lista li { display: flex; gap: var(--e-3); align-items: center; font-size: var(--t-sm); }
 
+/* ---- Recordatorio masivo por WhatsApp (1.26.0) ---- */
+.av-progreso { display: flex; justify-content: space-between; gap: var(--e-2); margin: var(--e-3) 0 var(--e-1); font-size: var(--t-sm); }
+.av-progreso .error { color: var(--c-peligro); }
+.av-tarjeta { margin-top: var(--e-3); }
+.av-cab { display: flex; gap: var(--e-3); align-items: flex-start; }
+.av-cab .mk { width: 40px; height: 40px; }
+.av-cab .mk .ic { width: 20px; height: 20px; }
+.av-cab div { display: flex; flex-direction: column; min-width: 0; }
+.av-cab small { color: var(--c-tinta-2); }
+.av-msg { margin: var(--e-2) 0; }
+.av-msg summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--c-enlace); font-weight: var(--w-medio); }
+.av-msg .mensaje { white-space: pre-line; padding: var(--e-3); border-radius: var(--r-md); background: var(--c-ok-fondo); color: var(--c-tinta); font-size: var(--t-sm); }
+.av-resultados { display: grid; gap: var(--e-2); }
+.av-nav { display: flex; justify-content: space-between; gap: var(--e-2); margin-top: var(--e-3); }
+.av-nav .mini { display: inline-flex; align-items: center; gap: var(--e-1); min-height: 44px; }
+.centro { text-align: center; }
+.tarjeta-form.centro { display: flex; flex-direction: column; align-items: center; gap: var(--e-2); }
+.mk.grande { width: 56px; height: 56px; }
+.mk.grande .ic { width: 28px; height: 28px; }
+.solo-imprimir { display: none; }
+@media print { .solo-imprimir { display: block; } }
+
 @media print {
   @page { size: A4; margin: 12mm; }
   html, body { background: #fff !important; }
