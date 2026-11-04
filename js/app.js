@@ -2,7 +2,7 @@
 import { CONFIG } from './config.js';
 import { kvGet, kvSet, colaTodos, borrarTodo } from './db.js';
 import { iniciarGoogle, dibujarBoton, leerToken, cerrarSesionGoogle, googleDisponible } from './auth.js';
-import { llamar } from './api.js';
+import { llamar, medidas } from './api.js';
 import { encolar, sincronizarTodo, sincronizarParcial, reaplicarPendientes, iniciarAutoSync, alCambiar, pendientesDeEnvio, siguienteProvisional } from './sync.js';
 import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
@@ -1307,8 +1307,39 @@ async function vCola() {
         ${res.mensaje && o.estadoLocal !== 'ok' ? `<small class="${o.estadoLocal === 'rechazado' ? 'error' : ''}">${esc(res.mensaje)}</small>` : ''}</div>
         <div class="der"><span class="chip ${o.estadoLocal === 'ok' ? 'e-activo' : o.estadoLocal === 'rechazado' || o.estadoLocal === 'error' ? 'e-moroso' : 'e-porvencer'}">${etiqueta[o.estadoLocal] || o.estadoLocal}</span></div>
       </a></li>`;
-    }).join('') || '<li class="vacio">No hay operaciones.</li>'}</ul>`;
+    }).join('') || '<li class="vacio">No hay operaciones.</li>'}</ul>
+    ${await bloqueTiempos()}`;
   $('#btnSync').onclick = sincronizarManual;
+  if ($('#tmBorrar')) $('#tmBorrar').onclick = async () => { await kvSet('medidas', []); vCola(); };
+}
+
+// ---- MEDIDOR DE TIEMPOS (Cola → Tiempos de conexión) --------------------------------------
+const MED_NOMBRE = { sincronizar: 'Sincronizar (descarga)', enviarCola: 'Enviar cola', sincronizarParcial: 'Actualizar PPPoE',
+  estadoCuenta: 'Estado de cuenta', comprobante: 'Recibo PDF', sesion: 'Sesión', clavesCliente: 'Claves', dashboard: 'Panel',
+  movimientos: 'Movimientos', estadoSolicitudes: 'Revisar envíos', pagosCliente: 'Pagos', consultarDocumento: 'DNI/RUC', perfil: 'Perfil' };
+const seg = (ms) => (ms === undefined || ms === null || isNaN(ms) ? '–' : (Number(ms) / 1000).toFixed(1) + ' s');
+async function bloqueTiempos() {
+  const l = await medidas();
+  if (!l.length) return seccion('tiempos', 'Tiempos de conexión', '<p class="sub">Aún no hay mediciones. Se anotan solas en cada envío o sincronización.</p>');
+  // promedio por acción (sin errores)
+  const prom = {};
+  l.filter((m) => !m.error).forEach((m) => { const p = prom[m.accion] = prom[m.accion] || { n: 0, total: 0, servidor: 0, red: 0 };
+    p.n++; p.total += m.total || 0; p.servidor += m.servidor || 0; p.red += Math.max(0, (m.red || 0) - (m.servidor || 0)); });
+  const filasP = Object.entries(prom).map(([a, p]) => `<tr><td>${esc(MED_NOMBRE[a] || a)} <small>(${p.n})</small></td><td>${seg(p.total / p.n)}</td><td>${seg(p.servidor / p.n)}</td><td>${seg(p.red / p.n)}</td></tr>`).join('');
+  const filasL = l.slice(0, 20).map((m) => {
+    const senal = m.red !== undefined && m.servidor !== undefined ? Math.max(0, m.red - m.servidor) : undefined;
+    const det = [m.servidor !== undefined ? `servidor ${seg(m.servidor)}` : '', senal !== undefined ? `señal ${seg(senal)}` : '',
+      m.token > 300 ? `inicio de sesión ${seg(m.token)}` : '', m.msCandado > 300 ? `esperó a otro celular ${seg(m.msCandado)}` : '',
+      m.lect ? `${m.lect} hojas leídas ${seg(m.msLect)}` : '', m.msGuardar > 300 ? `guardar ${seg(m.msGuardar)}` : '',
+      m.kb !== undefined ? `${m.kb} KB` : '', m.n ? `${m.n} operación(es)` : ''].filter(Boolean).join(' · ');
+    return `<li><div><b>${esc(MED_NOMBRE[m.accion] || m.accion)} · ${seg(m.total)}</b><small>${esc(new Date(m.hora).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' }))} · ${esc(det)}</small>
+      ${m.error ? `<small class="error">${esc(m.error)}</small>` : ''}</div></li>`;
+  }).join('');
+  return seccion('tiempos', 'Tiempos de conexión', `
+    ${ayuda('Tiempos de conexión', 'Cuánto tardó cada envío o sincronización y en qué se fue el tiempo.\nServidor: lo que tardó Google en leer y guardar las hojas.\nSeñal: el viaje por internet (depende de la cobertura).\nEsperó a otro celular: dos celulares enviaron a la vez.\nSirve para decidir qué mejorar.')}
+    <table class="resumen"><thead><tr><th>Promedio</th><th>Total</th><th>Servidor</th><th>Señal</th></tr></thead><tbody>${filasP}</tbody></table>
+    <ul class="lista compacta">${filasL}</ul>
+    <button class="btn secundario" id="tmBorrar">Borrar mediciones</button>`, l.length);
 }
 
 // ---- MIS COBROS DE HOY -------------------------------------------------------------
