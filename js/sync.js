@@ -74,9 +74,13 @@ export function sincronizarTodo() {
   _enCurso = (async () => {
     avisar({ tipo: 'inicio' });
     try {
-      await enviarCola();
-      // sinClaves: las claves WiFi/router no se guardan en el celular; se piden al abrir la ficha
-      const s = await llamar('sincronizar', { sinClaves: true });
+      // (1.30.0) con un solo lote por enviar: envío + descarga en UNA llamada (antes dos viajes al servidor)
+      let s = await enviarYBajar();
+      if (!s) {
+        await enviarCola();
+        // sinClaves: las claves WiFi/router no se guardan en el celular; se piden al abrir la ficha
+        s = await llamar('sincronizar', { sinClaves: true });
+      }
       const antes = await kvGet('libroId');
       if (s.libro && antes && antes !== s.libro) await limpiarPorCambioDeLibro(s.libro);
       if (s.libro) await kvSet('libroId', s.libro);
@@ -140,6 +144,55 @@ export function sincronizarParcial() {
     } catch (e) { return false; } finally { _parcial = null; }
   })();
   return _parcial;
+}
+
+// el servidor conoce "enviarYSincronizar" desde la API v33; si responde que no, se usa el camino de siempre
+let _sinCombinado = false;
+
+/**
+ * Envía lo pendiente (si cabe en un lote) y trae los datos frescos en la misma llamada.
+ * Devuelve el paquete de datos, o null si no corresponde (nada que enviar, varios lotes o servidor anterior).
+ */
+async function enviarYBajar() {
+  if (_sinCombinado) return null;
+  const pend = (await pendientesDeEnvio()).sort((a, b) => String(a.fDispositivo).localeCompare(String(b.fDispositivo)));
+  if (!pend.length || pend.length > CONFIG.LOTE_ENVIO) return null;
+  const envio = pend.map((o) => { const { estadoLocal, resultado, intentos, ...limpio } = o; return limpio; });
+  let r;
+  try {
+    r = await llamar('enviarYSincronizar', { operaciones: envio, libro: (await kvGet('libroId')) || '', sinClaves: true });
+  } catch (e) {
+    if (e.codigo === 'NEGOCIO' && /desconocida/i.test(e.message)) { _sinCombinado = true; return null; }   // servidor anterior
+    await marcarFallaEnvio(pend, e);
+    throw e;
+  }
+  if (r.envio && r.envio.libroCambiado) { await limpiarPorCambioDeLibro(r.envio.libro); return null; }
+  await guardarResultados(pend, (r.envio && r.envio.resultados) || []);
+  return r.datos || null;
+}
+
+/** Sin señal o error: se anota en cada operación (igual que el envío de siempre). */
+async function marcarFallaEnvio(lote, e) {
+  if (e.codigo === 'RED') {
+    // no salió por falta de señal: se marca como trabajo "sin señal" para que el
+    // servidor, si hay conflicto, lo deje A REVISAR en vez de perder el cobro
+    for (const o of lote) { o.offline = true; await colaPut(o); }
+  } else if (e.codigo !== 'AUTH') {
+    for (const o of lote) { o.estadoLocal = 'error'; o.intentos = (o.intentos || 0) + 1; o.resultado = { mensaje: e.message }; await colaPut(o); }
+  }
+}
+
+/** Anota en la cola del celular lo que respondió el servidor por cada operación. */
+async function guardarResultados(lote, resultados) {
+  for (const res of resultados) {
+    const o = lote.find((x) => x.idSolicitud === res.idSolicitud);
+    if (!o) continue;
+    o.resultado = res;
+    o.estadoLocal = res.estado === 'PROCESADO' ? 'ok' : res.estado === 'RECHAZADO' ? 'rechazado' : 'enviado';
+    await colaPut(o);
+    if (o.estadoLocal === 'rechazado') avisar({ tipo: 'rechazo', op: o, mensaje: res.mensaje || '' });
+  }
+  avisar({ tipo: 'cola' });
 }
 
 async function enviarCola() {

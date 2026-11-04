@@ -1314,7 +1314,7 @@ async function vCola() {
 }
 
 // ---- MEDIDOR DE TIEMPOS (Cola → Tiempos de conexión) --------------------------------------
-const MED_NOMBRE = { sincronizar: 'Sincronizar (descarga)', enviarCola: 'Enviar cola', sincronizarParcial: 'Actualizar PPPoE',
+const MED_NOMBRE = { sincronizar: 'Sincronizar (descarga)', enviarCola: 'Enviar cola', enviarYSincronizar: 'Enviar + sincronizar', sincronizarParcial: 'Actualizar PPPoE',
   estadoCuenta: 'Estado de cuenta', comprobante: 'Recibo PDF', sesion: 'Sesión', clavesCliente: 'Claves', dashboard: 'Panel',
   movimientos: 'Movimientos', estadoSolicitudes: 'Revisar envíos', pagosCliente: 'Pagos', consultarDocumento: 'DNI/RUC', perfil: 'Perfil' };
 const seg = (ms) => (ms === undefined || ms === null || isNaN(ms) ? '–' : (Number(ms) / 1000).toFixed(1) + ' s');
@@ -1330,7 +1330,8 @@ async function bloqueTiempos() {
     const senal = m.red !== undefined && m.servidor !== undefined ? Math.max(0, m.red - m.servidor) : undefined;
     const det = [m.servidor !== undefined ? `servidor ${seg(m.servidor)}` : '', senal !== undefined ? `señal ${seg(senal)}` : '',
       m.token > 300 ? `inicio de sesión ${seg(m.token)}` : '', m.msCandado > 300 ? `esperó a otro celular ${seg(m.msCandado)}` : '',
-      m.msAbrir > 300 ? `abrir libro ${seg(m.msAbrir)}` : '', m.lect ? `${m.lect} hojas leídas ${seg(m.msLect)}` : '', m.msGuardar > 300 ? `guardar ${seg(m.msGuardar)}` : '',
+      m.msAbrir > 300 ? `abrir libro ${seg(m.msAbrir)}` : '', m.lote ? `${m.loteTablas} hojas en ${m.lote} pedido(s) ${seg(m.msLote)}` : '',
+      m.loteError ? `lectura en bloque no disponible (${m.loteError})` : '', m.lect ? `${m.lect} hojas leídas una por una ${seg(m.msLect)}` : '', m.msGuardar > 300 ? `guardar ${seg(m.msGuardar)}` : '',
       m.kb !== undefined ? `${m.kb} KB` : '', m.n ? `${m.n} operación(es)` : ''].filter(Boolean).join(' · ');
     return `<li><div><b>${esc(MED_NOMBRE[m.accion] || m.accion)} · ${seg(m.total)}</b><small>${esc(new Date(m.hora).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' }))} · ${esc(det)}</small>
       ${m.error ? `<small class="error">${esc(m.error)}</small>` : ''}</div></li>`;

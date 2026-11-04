@@ -13,7 +13,7 @@ async function anotarMedida(m) {
 export const medidas = async () => (await kvGet('medidas')) || [];
 
 // tiempo máximo de espera: una llamada colgada (señal débil) ya no traba la sincronización para siempre
-const ESPERA_MS = { sincronizar: 60000, enviarCola: 60000, comprobante: 60000 };
+const ESPERA_MS = { sincronizar: 60000, enviarCola: 60000, comprobante: 60000, enviarYSincronizar: 90000 };
 
 export async function llamar(accion, params = {}, opciones = {}) {
   if (!navigator.onLine) throw Object.assign(new Error('Sin conexión a internet'), { codigo: 'RED' });
@@ -43,7 +43,8 @@ export async function llamar(accion, params = {}, opciones = {}) {
   }
   const t = (j && j.t) || {};
   anotarMedida(Object.assign(med, { total: Date.now() - t0, red: Date.now() - t1, servidor: t.ms, lect: t.lect, filas: t.filas,
-    msLect: t.msLect, msCandado: t.msCandado, msGuardar: t.msGuardar, msAbrir: t.msAbrir, error: j && !j.ok ? String(j.codigo || 'ERROR') : '' }));
+    msLect: t.msLect, msCandado: t.msCandado, msGuardar: t.msGuardar, msAbrir: t.msAbrir,
+    lote: t.lote, loteTablas: t.loteTablas, msLote: t.msLote, loteError: t.loteError, error: j && !j.ok ? String(j.codigo || 'ERROR') : '' }));
   if (!j || !j.ok) {
     // una sesión de la app que el servidor ya no acepta se descarta: la próxima vez se usa Google
     if (j && j.codigo === 'AUTH' && /^S1\./.test(idToken)) {
