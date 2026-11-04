@@ -1395,6 +1395,18 @@ const ACC_CORTE = [
     ayuda: 'El cliente deja el servicio (o quita uno de su paquete).\n• Se anulan las cuotas futuras y se libera el PPPoE.\n• La deuda se mantiene y el historial queda.\nSi vuelve, se puede "Volver a activar" desde la ficha.' },
 ];
 
+// Corte / baja con fecha pasada: hasta DIAS_ATRAS_CORTE días y nunca antes del inicio del servicio
+const DIAS_ATRAS_CORTE = 120;
+function minFechaCorte(s, paquete) {
+  const d = new Date(hoyISO() + 'T12:00:00'); d.setDate(d.getDate() - DIAS_ATRAS_CORTE);
+  let min = d.toISOString().slice(0, 10);
+  for (const x of paquete || [s]) {
+    const ini = String(x.FECHA_INICIO || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(ini) && ini > min) min = ini;
+  }
+  return min;
+}
+
 function vCorte(idServ) {
   const s = servicioPorId(idServ);
   if (!s) { vista().innerHTML = '<p class="error">Servicio no encontrado.</p>'; return; }
@@ -1413,8 +1425,10 @@ function vCorte(idServ) {
       <div id="quedaWrap" hidden><label><span id="quedaTxt"></span><input id="quedaPrecio" type="number" step="0.10" inputmode="decimal"></label></div>
     </fieldset>` : ''}
     <p class="aviso" id="notaPpp" hidden></p>
+    <label class="tit-ic">Fecha ${ayuda('Fecha', 'Día en que se cortó, suspendió o dio de baja.\nNormalmente es hoy. Si pasó antes y no se registró, elija ese día (hasta ' + DIAS_ATRAS_CORTE + ' días atrás).\nLas cuotas desde el mes siguiente a esa fecha se anulan (o desde ese mismo mes si desmarca "Cobrar el mes").')}
+      <input id="fechaCorte" type="date" value="${hoyISO()}" max="${hoyISO()}" min="${minFechaCorte(s, paquete)}"></label>
     <label>Motivo<input id="motivo" value="Falta de pago"></label>
-    <label class="check"><input type="checkbox" id="cobrarMes" checked> Cobrar el mes del corte</label>
+    <label class="check"><input type="checkbox" id="cobrarMes" checked> <span id="cobrarMesTxt">Cobrar el mes del corte</span></label>
     <button class="btn grande rojo" id="ok">EJECUTAR</button>
     <a class="btn secundario" href="#/cliente/${esc(s.ID_CLIENTE)}">Cancelar</a></section>`;
   const radiosAcc = () => [...vista().querySelectorAll('input[name="acc"]')];
@@ -1455,9 +1469,17 @@ function vCorte(idServ) {
     pintarDuo(true);
   } else radiosAcc().forEach((r) => { r.onchange = pintarPpp; });
   pintarPpp();
+  // el texto de "cobrar el mes" nombra el mes de la fecha elegida (p. ej. "Cobrar octubre 2026")
+  const pintarMes = () => { const f = $('#fechaCorte').value; $('#cobrarMesTxt').textContent = f ? `Cobrar el mes del corte (${txtPeriodo(f.slice(0, 7) + '-01')})` : 'Cobrar el mes del corte'; };
+  $('#fechaCorte').onchange = pintarMes;
+  pintarMes();
   $('#ok').onclick = async () => {
     const motivo = $('#motivo').value.trim();
     if (motivo.length < 3) return aviso('Indique el motivo.', 'error');
+    const fecha = $('#fechaCorte').value;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return aviso('Elija la fecha.', 'error');
+    if (fecha > hoyISO()) return aviso('La fecha no puede ser futura.', 'error');
+    if (fecha < $('#fechaCorte').min) return aviso(`La fecha no puede ser anterior al ${txtFecha($('#fechaCorte').min)}.`, 'error');
     const accion = accSel(), servs = elegidos();
     if (!servs.length) return aviso('Marque al menos un servicio.', 'error');
     const q = queda(), soloUno = paquete && accion === 'BAJA' && q.length === 1;
@@ -1465,11 +1487,12 @@ function vCorte(idServ) {
     if (soloUno && !(nuevoPrecio > 0)) return aviso('Escriba el precio del servicio que se queda.', 'error');
     const cambiaPrecio = soloUno && r2(nuevoPrecio) !== r2(Number(q[0].TARIFA));
     const titulo = `¿${ACC_CORTE.find((a) => a.v === accion).t}?`;
-    if (!(await confirmar(`${s.CLIENTE}\n${servs.map((x) => x.ID_SERV + ' ' + nombreServicio(x.PLAN)).join(' + ')}` +
+    if (!(await confirmar(`${s.CLIENTE}\n${servs.map((x) => x.ID_SERV + ' ' + nombreServicio(x.PLAN)).join(' + ')}\nFecha: ${txtFecha(fecha)}` +
+      (fecha !== hoyISO() ? ' (fecha pasada)' : '') + ($('#cobrarMes').checked ? '' : `\nNo se cobra ${txtPeriodo(fecha.slice(0, 7) + '-01')}`) +
       (cambiaPrecio ? `\n${nombreServicio(q[0].PLAN)}: ${soles(q[0].TARIFA)} → ${soles(nuevoPrecio)} desde el mes siguiente` : ''), { titulo, si: 'Ejecutar', peligro: true }))) return;
-    for (const x of servs) await encolar({ tipo: accion, idServ: x.ID_SERV, idCliente: x.ID_CLIENTE, motivo, fecha: hoyISO(), cobrarMesCorte: $('#cobrarMes').checked });
+    for (const x of servs) await encolar({ tipo: accion, idServ: x.ID_SERV, idCliente: x.ID_CLIENTE, motivo, fecha, cobrarMesCorte: $('#cobrarMes').checked });
     if (cambiaPrecio) {
-      const d = new Date(hoyISO() + 'T00:00:00'); d.setMonth(d.getMonth() + 1, 1);
+      const d = new Date(fecha + 'T00:00:00'); d.setMonth(d.getMonth() + 1, 1);
       await encolar({ tipo: 'CAMBIAR_PLAN', idServ: q[0].ID_SERV, idCliente: q[0].ID_CLIENTE, plan: q[0].PLAN, tarifa: nuevoPrecio,
         fecha: d.toISOString().slice(0, 10) });
     }
