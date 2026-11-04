@@ -2730,11 +2730,11 @@ function pintarCuenta(cont, id, cu, anio) {
       <ul class="lista compacta">${revisar.slice(0, 20).map((k) => `<li><button class="enlace" data-cargos="${esc(k.ID_CARGO)}">
         <b>${esc(txtPeriodo(k.PERIODO))} · ${esc(nombreCorto(k))}</b><small>${esc(String(k.OBS).slice(0, 90))}</small></button></li>`).join('')}</ul></details>` : ''}`;
   cont.querySelectorAll('[data-anio]').forEach((b) => { b.onclick = () => pintarCuenta(cont, id, cu, b.dataset.anio); });
-  cont.querySelectorAll('[data-cargos]').forEach((b) => { b.onclick = () => detalleMes(cu, b.dataset.cargos.split(',')); });
+  cont.querySelectorAll('[data-cargos]').forEach((b) => { b.onclick = () => detalleMes(cu, b.dataset.cargos.split(','), id); });
 }
 
 /** Ventana con lo importante de un mes: monto, pagos (recibo, fecha, método, comentario) y la nota del cargo. */
-function detalleMes(cu, ids) {
+function detalleMes(cu, ids, idCli) {
   const ks = ids.map((i) => cu.cargos.find((k) => k.ID_CARGO === i)).filter(Boolean);
   if (!ks.length) return;
   const bloque = (k) => {
@@ -2748,6 +2748,8 @@ function detalleMes(cu, ids) {
         <div class="${Number(k.SALDO) > 0.004 ? 'peligro' : 'ok'}"><span>Falta</span><b>${soles(k.SALDO)}</b></div>`}</div>
       ${anul ? '' : `<p class="sub">${ic('reloj')}Vence ${esc(txtFecha(k.VENCE))}${Number(k.DIAS_ATRASO) > 0 ? ' · <b>' + esc(txtMora(k.DIAS_ATRASO)) + ' de atraso</b>' : ''}</p>`}
       ${String(k.OBS || '').trim() ? `<div class="nota-caja">${ic('chat')}<span>${esc(k.OBS)}</span></div>` : ''}
+      ${anul && puedeRestituir(k) ? `<button class="btn secundario" data-restituir="${esc(k.ID_CARGO)}">${ic('sync')}Restituir este mes</button>
+        <p class="sub">Si se anuló por error, vuelve a cobrarse (con su monto u otro).</p>` : ''}
       ${pagos.length ? `<ul class="lista pagos">${pagos.map((d) => { const p = cu.pagos.find((x) => x.N_RECIBO === d.N_RECIBO) || {};
         return `<li><a href="#/pago/${encodeURIComponent(d.N_RECIBO)}">${icoMetodo(d.METODO)}<div><b>Pagado el ${esc(txtFecha(d.FECHA_PAGO))}</b><small>${esc(d.N_RECIBO)} · ${esc(d.METODO)}</small>
           ${comentarioPago(p.OBS) ? `<small class="coment">“${esc(comentarioPago(p.OBS))}”</small>` : ''}</div><div class="der"><b class="monto">${soles(d.MONTO_APLICADO)}</b></div></a></li>`; }).join('')}</ul>`
@@ -2757,11 +2759,32 @@ function detalleMes(cu, ids) {
   prepararDialogo(m, () => {});
   m.querySelector('#ecCerrar').onclick = cerrarModal;
   m.querySelectorAll('a[href^="#/pago/"]').forEach((a) => { a.addEventListener('click', cerrarModal); });
+  m.querySelectorAll('[data-restituir]').forEach((b) => { b.onclick = () => restituirMes(ks.find((k) => k.ID_CARGO === b.dataset.restituir), idCli); });
+}
+
+/** Mes anulado que se puede volver a cobrar (no los de un convenio o castigo: esos se revierten con el convenio). */
+const puedeRestituir = (k) => k && k.ANULADO === 'Sí' && !/\[(CONVENIO|CASTIGADO)/.test(String(k.OBS || ''));
+
+/** Restituir un mes anulado por error: pide el monto y el motivo y lo manda como ajuste (AJUSTAR_CARGOS · RESTITUIR). */
+async function restituirMes(k, idCli) {
+  idCli = idCli || k.ID_CLIENTE;                 // los meses del estado de cuenta no traen el cliente
+  if (!puedeRestituir(k) || !idCli) return;
+  const nombre = `${txtPeriodo(k.PERIODO)} ${nombreCorto(k)}`;
+  const t = await pedirTexto(`Monto con que vuelve ${nombre} (S/)`, { titulo: 'Restituir mes', valor: String(Number(k.MONTO) || ''), si: 'Siguiente' });
+  if (t === null || t === undefined) return;
+  const monto = r2(Number(String(t).replace(',', '.')));
+  if (!(monto > 0)) return aviso('Escriba un monto mayor a 0.', 'error');
+  const motivo = String((await pedirTexto('Motivo (ej.: se anuló por error al ajustar)', { titulo: 'Restituir mes', valor: 'Se anuló por error', si: 'Siguiente' })) || '').trim();
+  if (motivo.length < 5) return aviso('Escriba el motivo (mínimo 5 letras).', 'error');
+  if (!(await confirmar(`${(D.porId[idCli] || {}).NOMBRES || idCli}\n${nombre}: anulado → ${soles(monto)}\nMotivo: ${motivo}`, { titulo: '¿Restituir el mes?', si: 'Restituir' }))) return;
+  await encolar({ tipo: 'AJUSTAR_CARGOS', idCliente: idCli, motivo, datos: { items: [{ idCargo: k.ID_CARGO, tipo: 'RESTITUIR', monto }] } });
+  aviso(navigator.onLine ? 'Enviado. En unos segundos aparece en Cobrar.' : 'Guardado sin señal: se enviará al volver la conexión.');
+  location.hash = '#/cliente/' + idCli;
 }
 
 // ---- AJUSTE DE CUENTA (descuento, perdón, anulación, cambio de monto) -----------------------
 // Lo ya pagado no se toca; el servidor (Ajustes.gs) vuelve a validar todo y deja el registro en la tabla Ajustes.
-const AJ_NOMBRE = { DESCUENTO: 'Descuento', PERDON: 'Perdonado', ANULACION: 'Anulado', CAMBIO_MONTO: 'Cambio de precio' };
+const AJ_NOMBRE = { DESCUENTO: 'Descuento', PERDON: 'Perdonado', ANULACION: 'Anulado', CAMBIO_MONTO: 'Cambio de precio', RESTITUIR: 'Restituido' };
 const AJ_MOTIVOS = ['Falla del servicio', 'Descuento comercial', 'Cortesía', 'Error de cobro / precio', 'Acuerdo con el cliente', 'Otro'];
 
 /** Igual que op_ajustarCargos: monto nuevo y si queda anulado, o el error que daría el servidor. */
