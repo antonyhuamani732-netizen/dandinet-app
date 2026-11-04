@@ -43,7 +43,7 @@ export async function llamar(accion, params = {}, opciones = {}) {
   }
   const t = (j && j.t) || {};
   anotarMedida(Object.assign(med, { total: Date.now() - t0, red: Date.now() - t1, servidor: t.ms, lect: t.lect, filas: t.filas,
-    msLect: t.msLect, msCandado: t.msCandado, msGuardar: t.msGuardar, error: j && !j.ok ? String(j.codigo || 'ERROR') : '' }));
+    msLect: t.msLect, msCandado: t.msCandado, msGuardar: t.msGuardar, msAbrir: t.msAbrir, error: j && !j.ok ? String(j.codigo || 'ERROR') : '' }));
   if (!j || !j.ok) {
     // una sesión de la app que el servidor ya no acepta se descarta: la próxima vez se usa Google
     if (j && j.codigo === 'AUTH' && /^S1\./.test(idToken)) {
