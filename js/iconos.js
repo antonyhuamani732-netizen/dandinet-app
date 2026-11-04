@@ -3,6 +3,7 @@
 // Uso en JS:   ic('cobrar')  → devuelve el <svg> como texto.
 // Son decorativos (aria-hidden): el texto del botón siempre acompaña al ícono.
 const P = {
+  borrar: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4h6v3"/>',
   inicio: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   buscar: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4.2-4.2"/>',
   cola: '<path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',

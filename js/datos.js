@@ -29,6 +29,7 @@ export function aplicar(s) {
   D.suspensiones = aObjetos(s.suspensiones);
   D.ajustes = aObjetos(s.ajustes);
   D.avisos = aObjetos(s.avisos);                   // avisos de cobro por WhatsApp (desde la v1.26)
+  D.avisos.forEach((a) => { a.CAMPANA = campanaTxt(a.CAMPANA); });   // (1.31.0) la hoja la guardaba como fecha
   D.convenios = aObjetos(s.convenios);             // convenios de pago y castigos (desde la v1.19)                 // ajustes de cuenta de los últimos 13 meses (desde la v1.18)
   // órdenes de trabajo / hojas de ruta (desde la v1.11); DATOS y SNAPSHOT vienen como texto JSON
   const json = (t) => { try { return JSON.parse(t || '{}'); } catch (e) { return {}; } };
@@ -87,8 +88,31 @@ export function aplicarPendientes(ops) {
         const d = o.datos || {};
         D.avisos = D.avisos || [];
         if (!D.avisos.some((a) => a.ID_SOLICITUD === o.idSolicitud)) D.avisos.push({ ID_AVISO: '', FECHA: o.fDispositivo, ID_CLIENTE: o.idCliente,
-          CLIENTE: cli.NOMBRES || '', ZONA: cli.ZONA || '', CAMPANA: d.campana || '', TIPO: d.tipo || '', RESULTADO: d.resultado || '',
+          CLIENTE: cli.NOMBRES || '', ZONA: cli.ZONA || '', CAMPANA: campanaTxt(d.campana), TIPO: d.tipo || '', RESULTADO: d.resultado || '',
           MONTO: d.monto || 0, USUARIO: o.usuarioLocal || '', OBS: o.motivo || '', ID_SOLICITUD: o.idSolicitud, _pend: o.estadoLocal !== 'ok' });
+        break;
+      }
+      case 'COBRO': {                                 // (1.31.0) el cobro baja la deuda al instante, sin esperar al servidor
+        const ks = (D.cargos || []).filter((k) => (o.cargos || []).includes(k.ID_CARGO) && !(k._cobros || []).includes(o.idSolicitud)).sort(ordenCargos);
+        if (!ks.length) break;
+        const hoy = hoyISO();
+        let vencidoPagado = 0;
+        repartir(ks, o.monto).forEach(({ cargo, aplicado }) => {
+          cargo.SALDO = r2(Number(cargo.SALDO) - aplicado);
+          cargo.PAGADO = r2(Number(cargo.PAGADO || 0) + aplicado);
+          if (String(cargo.VENCE || '').slice(0, 10) < hoy) vencidoPagado = r2(vencidoPagado + aplicado);
+          cargo._cobros = (cargo._cobros || []).concat([o.idSolicitud]); cargo._pend = true;
+        });
+        const r = D.resumen[o.idCliente];
+        if (r) {
+          r.DEUDA_TOTAL = r2(Math.max(0, Number(r.DEUDA_TOTAL || 0) - Number(o.monto || 0)));
+          r.DEUDA_VENCIDA = r2(Math.max(0, Number(r.DEUDA_VENCIDA || 0) - vencidoPagado));
+          const vencidos = new Set(D.cargos.filter((k) => k.ID_CLIENTE === o.idCliente && k.ANULADO !== 'Sí' && Number(k.SALDO) > 0.004 &&
+            String(k.VENCE || '').slice(0, 10) < hoy).map((k) => String(k.PERIODO).slice(0, 7)));
+          r.MESES_ADEUDA = vencidos.size;
+          if (!r.DEUDA_VENCIDA) { r.DIAS_ATRASO = 0; r.ALERTA = ''; if (r.ESTADO === 'Moroso') r.ESTADO = 'Activo'; }
+          r.ULT_PAGO = hoy; r._pend = true;
+        }
         break;
       }
       case 'AGREGAR_PPPOE':
@@ -263,6 +287,22 @@ const MESES_L = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO',
 const ddmmaaaa = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '');
 const sumarDiasISO = (iso, n) => new Date(Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)) + n)).toISOString().slice(0, 10);
 /** Mes que se recuerda en el aviso de pago: desde el día 20, el mes siguiente ("aaaa-mm"). */
+/**
+ * Campaña como "aaaa-mm" (1.31.0). Hasta la API v35 la hoja guardaba "2026-11" como fecha y llegaba como
+ * "2026-11-01T00:00:00" o como número de serie: la app no reconocía lo ya avisado y el masivo "se reiniciaba".
+ */
+export function campanaTxt(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number') {
+    if (v < 20000 || v > 80000) return String(v);
+    const d = new Date(Math.round((v - 25569) * 864e5));
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+  }
+  const m = /^(\d{4})-(\d{1,2})(?!\d)/.exec(String(v).trim());
+  return m ? m[1] + '-' + m[2].padStart(2, '0') : String(v);
+}
+/** Mes anterior de "aaaa-mm". */
+export const mesAnterior = (ym) => { const a = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7)); return m === 1 ? (a - 1) + '-12' : a + '-' + String(m - 1).padStart(2, '0'); };
 export function campanaActual() { const h = hoyISO(), ym = h.slice(0, 7); return Number(h.slice(8, 10)) >= 20 ? mesSiguiente(ym) : ym; }
 /** "SERVICIO DE INTERNET 20mbp" o "BASICO ANTENA" → "INTERNET"; CATV → "TV CABLE"; plan con ambos → "INTERNET + TV CABLE". */
 export const etiquetaServicio = (plan) => {

@@ -86,6 +86,9 @@
 
   /* ---- Diseño -------------------------------------------------------------------- */
   --ancho-max: 680px;
+  --ancho-max-pc: 1200px;   /* contenido en computadora (1.31.0) */
+  --ancho-lateral: 232px;   /* menú lateral en computadora */
+  --alto-cabecera: 56px;
   --alto-nav: 64px;
 
   /* ---- Plantilla de documentos imprimibles (órdenes, hojas de ruta, reportes) --------

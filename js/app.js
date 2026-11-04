@@ -1,6 +1,6 @@
 // APP D@NDINET — pantallas y navegación (#/ruta)
 import { CONFIG } from './config.js';
-import { kvGet, kvSet, colaTodos, borrarTodo } from './db.js';
+import { kvGet, kvSet, colaTodos, colaPut, borrarTodo } from './db.js';
 import { iniciarGoogle, dibujarBoton, leerToken, cerrarSesionGoogle, googleDisponible } from './auth.js';
 import { llamar, medidas } from './api.js';
 import { encolar, sincronizarTodo, sincronizarParcial, reaplicarPendientes, iniciarAutoSync, alCambiar, pendientesDeEnvio, siguienteProvisional } from './sync.js';
@@ -8,7 +8,7 @@ import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
   cargosDe, repartir, pppoeDisponibles, plantilla, MSG_DEFECTO, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
   nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas, serviciosDuo, detalleInstalacion,
-  detalleCobro, campanaActual, textoPlantilla,
+  detalleCobro, campanaActual, textoPlantilla, mesAnterior,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -666,11 +666,10 @@ function vEditarServicio(idServ) {
 async function vCobrar(id) {
   const c = D.porId[id];
   if (!c) { vista().innerHTML = '<p class="error">Cliente no encontrado.</p>'; return; }
-  // cargos que ya están en cola sin enviar: no se ofrecen otra vez
-  const enCola = new Set((await colaTodos()).filter((o) => o.tipo === 'COBRO' && ['pendiente', 'enviado', 'error'].includes(o.estadoLocal))
-    .flatMap((o) => o.cargos || []));
+  // (1.31.0) los cobros que siguen en la cola ya bajaron el saldo en el celular (aplicarPendientes): lo pagado
+  // completo no se ofrece otra vez y de un pago parcial solo queda el resto
   const hoyMes = hoyISO().slice(0, 7);
-  const todos = cargosDe(id).filter((k) => !enCola.has(k.ID_CARGO));
+  const todos = cargosDe(id);
   // Un cliente con INTERNET y CATV (dos servicios) se cobra como uno: una fila por MES que marca ambos.
   // "Cobrar solo uno" muestra cada servicio por separado (ej.: pagó solo el internet).
   const pagadoTxt = (k) => (Number(k.PAGADO) > 0 ? ' · pagado ' + soles(k.PAGADO) : '');
@@ -708,7 +707,7 @@ async function vCobrar(id) {
     <section class="cobro">
       <h2>Cobrar · ${esc(c.NOMBRES)}</h2>
       <p class="sub">${esc(id)} · ${esc(c.ZONA)}</p>
-      ${enCola.size ? '<p class="aviso">Hay meses de este cliente en la cola de envío; no se muestran para no cobrarlos dos veces.</p>' : ''}
+      ${D.cargos.some((k) => k.ID_CLIENTE === id && k._pend) ? '<p class="aviso">Hay cobros de este cliente en la cola de envío: lo ya cobrado no se muestra (o solo su resto).</p>' : ''}
       <div class="acciones-sel">
         <button type="button" class="mini" id="selVenc">Vencidos</button>
         <button type="button" class="mini" id="selTodo">Todo</button>
@@ -821,6 +820,8 @@ async function vCobrar(id) {
 // ---- RECIBO (provisional u oficial) ------------------------------------------------
 async function vRecibo(idSol) {
   const op = (await colaTodos()).find((o) => o.idSolicitud === idSol);
+  const alta = op && !op.idCliente && op.refAlta ? (await colaTodos()).find((x) => x.idSolicitud === op.refAlta) : null;
+  const idCli = op && (op.idCliente || (alta && (/Cliente (CLI-\d+)/.exec((alta.resultado || {}).mensaje || '') || [])[1]) || '');
   if (!op) { vista().innerHTML = '<p class="error">Recibo no encontrado.</p>'; return; }
   const v = op.vista || {}, res = op.resultado || {};
   const oficial = op.estadoLocal === 'ok' && res.nroRecibo;
@@ -851,11 +852,12 @@ async function vRecibo(idSol) {
       <p class="pie">Recibo interno de control de pagos. No es comprobante SUNAT.</p>
       ${oficial ? `<div id="zonaPdf"><button class="btn grande azul" id="btnPdf">${ic('documento')}Recibo PDF</button></div>` : ''}
       ${!rech ? `<button class="btn ${oficial ? '' : 'grande verde'}" id="btnWspTxt">${ic('chat')}Enviar texto por WhatsApp</button>` : ''}
-      <a class="btn" href="#/cliente/${esc(op.idCliente)}">Volver al cliente</a>
+      ${idCli ? `<a class="btn" href="#/cliente/${esc(idCli)}">Volver al cliente</a>` : ''}
       <a class="btn secundario" href="#/inicio">Inicio</a>
     </section>`;
   if (oficial) $('#btnPdf').onclick = () => prepararPdf(res.nroRecibo, $('#zonaPdf'));
-  if (!rech) $('#btnWspTxt').onclick = () => enviarWhatsApp(op.idCliente, texto);
+  // cobro hecho en el alta: el cliente tiene código recién cuando el alta llega al servidor
+  if (!rech) $('#btnWspTxt').onclick = () => (idCli && D.porId[idCli] ? enviarWhatsApp(idCli, texto) : abrirWhatsApp((op.vista || {}).telefono, texto));
 }
 
 /** Periodos guardados como fecha técnica (pagos migrados del Excel) → "JUL-2026". */
@@ -1296,7 +1298,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { EDITAR_SERVICIO: 'Corregir servicio', GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', AJUSTAR_CARGOS: 'Ajuste de cuenta', CREAR_CONVENIO: 'Convenio / castigo', REVERTIR_CONVENIO: 'Revertir convenio', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { EDITAR_SERVICIO: 'Corregir servicio', GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', ELIMINAR_ORDEN: 'Eliminar orden', ELIMINAR_MOVIMIENTO: 'Eliminar movimiento', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', AJUSTAR_CARGOS: 'Ajuste de cuenta', CREAR_CONVENIO: 'Convenio / castigo', REVERTIR_CONVENIO: 'Revertir convenio', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE', REGISTRAR_AVISO: 'Aviso WhatsApp' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -1343,27 +1345,118 @@ async function bloqueTiempos() {
     <button class="btn secundario" id="tmBorrar">Borrar mediciones</button>`, l.length);
 }
 
-// ---- MIS COBROS DE HOY -------------------------------------------------------------
-async function cobrosDeHoy() {
-  const hoy = hoyISO();
-  const mios = (await colaTodos()).filter((o) => o.tipo === 'COBRO' && String(o.fechaPago) === hoy && o.estadoLocal !== 'rechazado');
+// ---- COBROS (hoy por defecto; rango de fechas, cobrador y método opcionales) ------------------
+/**
+ * Cobros entre dos fechas (aaaa-mm-dd, incluidas). Junta lo que el celular aún no envió (su cola) con los
+ * pagos ya sincronizados (D.pagos: 13 meses de TODOS los cobradores). Funciona sin señal.
+ * f = { desde, hasta, quien: 'yo' | 'todos' | email, metodo, anulados }
+ */
+async function cobrosEntre(f) {
+  const yo = String(PERFIL.email).toLowerCase(), quien = f.quien || 'yo';
+  const enRango = (d) => d >= f.desde && d <= f.hasta;
+  const deQuien = (u) => quien === 'todos' || String(u || '').toLowerCase() === (quien === 'yo' ? yo : quien);
+  const okMetodo = (m) => !f.metodo || m === f.metodo;
+  const mios = (await colaTodos()).filter((o) => o.tipo === 'COBRO' && o.estadoLocal !== 'rechazado' &&
+    enRango(String(o.fechaPago || o.fDispositivo || '').slice(0, 10)) && deQuien(o.usuarioLocal || yo) && okMetodo(o.metodo));
   const nrosCola = new Set(mios.map((o) => (o.resultado || {}).nroRecibo).filter(Boolean));
-  const delServidor = D.pagos.filter((p) => String(p.FECHA).slice(0, 10) === hoy && String(p.USUARIO).toLowerCase() === PERFIL.email &&
-    p.ESTADO !== 'Anulado' && !nrosCola.has(p.N_RECIBO));
-  const items = mios.map((o) => ({ nro: (o.resultado || {}).nroRecibo || o.reciboProvisional, cliente: (o.vista || {}).cliente, monto: o.monto, metodo: o.metodo, estado: o.estadoLocal, id: o.idSolicitud }))
-    .concat(delServidor.map((p) => ({ nro: p.N_RECIBO, cliente: p.CLIENTE, monto: Number(p.MONTO), metodo: p.METODO, estado: 'ok' })));
-  return { items, total: r2(items.reduce((s, x) => s + Number(x.monto), 0)) };
+  const delServidor = (D.pagos || []).filter((p) => enRango(String(p.FECHA).slice(0, 10)) && deQuien(p.USUARIO) && okMetodo(p.METODO) &&
+    (f.anulados || p.ESTADO !== 'Anulado') && !nrosCola.has(p.N_RECIBO));
+  const items = mios.map((o) => ({ nro: (o.resultado || {}).nroRecibo || o.reciboProvisional, cliente: (o.vista || {}).cliente || (D.porId[o.idCliente] || {}).NOMBRES || '', monto: Number(o.monto), metodo: o.metodo,
+    estado: o.estadoLocal, id: o.idSolicitud, dia: String(o.fechaPago || o.fDispositivo).slice(0, 10), usuario: yo }))
+    .concat(delServidor.map((p) => ({ nro: p.N_RECIBO, cliente: p.CLIENTE, monto: Number(p.MONTO), metodo: p.METODO, estado: 'ok',
+      anulado: p.ESTADO === 'Anulado', dia: String(p.FECHA).slice(0, 10), usuario: String(p.USUARIO || '').toLowerCase() })))
+    .sort((a, b) => b.dia.localeCompare(a.dia) || String(b.nro).localeCompare(String(a.nro)));
+  const validos = items.filter((x) => !x.anulado);
+  return { items, total: r2(validos.reduce((t, x) => t + x.monto, 0)), recibos: validos.length };
 }
+/** Lo de hoy del propio cobrador (Inicio). */
+const cobrosDeHoy = () => cobrosEntre({ desde: hoyISO(), hasta: hoyISO(), quien: 'yo' });
+
+// fechas aaaa-mm-dd sin problemas de zona horaria
+const isoMas = (iso, dias) => new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10) + dias)).toISOString().slice(0, 10);
+const RANGOS_COBRO = {
+  hoy: ['Hoy', (h) => [h, h]],
+  ayer: ['Ayer', (h) => [isoMas(h, -1), isoMas(h, -1)]],
+  semana: ['Esta semana', (h) => { const d = (new Date(h + 'T12:00:00Z').getUTCDay() + 6) % 7; return [isoMas(h, -d), h]; }],
+  mes: ['Este mes', (h) => [h.slice(0, 8) + '01', h]],
+  mesPasado: ['Mes pasado', (h) => { const ini = isoMas(h.slice(0, 8) + '01', -1).slice(0, 8) + '01'; return [ini, isoMas(h.slice(0, 8) + '01', -1)]; }],
+};
 
 async function vHoy() {
-  const { items, total } = await cobrosDeHoy();
-  const porMetodo = {};
-  items.forEach((x) => { porMetodo[x.metodo] = r2((porMetodo[x.metodo] || 0) + Number(x.monto)); });
-  vista().innerHTML = `<p class="eyebrow">${esc(txtFecha(hoyISO()))}</p><h2>Mis cobros de hoy</h2>
-    <section class="hero"><span class="eyebrow">Total cobrado</span><span class="monto">${soles(total)}</span><span class="de">${items.length} recibo(s)</span></section>
-    <table class="resumen"><tbody>${Object.entries(porMetodo).map(([m, v]) => `<tr><td>${esc(m)}</td><td>${soles(v)}</td></tr>`).join('')}</tbody></table>
-    <ul class="lista">${items.map((x) => `<li><a href="${x.id ? '#/recibo/' + esc(x.id) : '#/pago/' + encodeURIComponent(x.nro)}"><div><b>${esc(x.nro)}</b><small>${esc(x.cliente)} · ${esc(x.metodo)}</small></div>
-      <div class="der">${soles(x.monto)}${x.estado !== 'ok' ? `<span class="chip e-porvencer">${ic('reloj')}Sin enviar</span>` : ''}</div></a></li>`).join('') || '<li class="vacio">Aún no hay cobros hoy.</li>'}</ul>`;
+  const hoy = hoyISO();
+  const def = { desde: hoy, hasta: hoy, quien: 'yo', metodo: '', anulados: false, abierto: false };
+  let f = Object.assign({}, def, (await kvGet('filtroCobros')) || {});
+  // por defecto, mis cobros de hoy: el filtro elegido se recuerda solo durante el mismo día (al ver un recibo y volver)
+  if (f.dia !== hoy) f = Object.assign({}, def);
+  f.dia = hoy;
+  const usuarios = [...new Set((D.pagos || []).map((p) => String(p.USUARIO || '').toLowerCase()).filter(Boolean))].sort();
+  const metodos = [...new Set((D.pagos || []).map((p) => p.METODO).filter(Boolean).concat(metodosPago()))].sort();
+  const esHoy = () => f.desde === hoy && f.hasta === hoy && f.quien === 'yo' && !f.metodo && !f.anulados;
+  const nombreU = (u) => String(u || '').replace(/@.*/, '');
+  const titulo = () => (f.desde === f.hasta ? (f.desde === hoy ? 'hoy' : 'del ' + txtFecha(f.desde)) : `del ${txtFecha(f.desde)} al ${txtFecha(f.hasta)}`);
+  const quienTxt = () => (f.quien === 'yo' ? 'Mis cobros' : f.quien === 'todos' ? 'Cobros de todos' : 'Cobros de ' + nombreU(f.quien));
+
+  vista().innerHTML = `<p class="eyebrow no-imprimir">${esc(txtFecha(hoy))}</p>
+    <div class="av-titulo"><h2 class="tit-ic" id="cbTit"></h2>
+      <button class="mini no-imprimir" id="cbCambiar" aria-expanded="false">${ic('calendario')}Cambiar fechas</button></div>
+    <div id="cbFiltros" class="tarjeta-form no-imprimir" hidden>
+      <div class="chips" role="group" aria-label="Atajos">${Object.entries(RANGOS_COBRO).map(([k, [t]]) => `<button type="button" class="mini" data-rango="${k}">${t}</button>`).join('')}</div>
+      <div class="filtros">
+        <label>Desde<input type="date" id="cbDesde" max="${hoy}"></label>
+        <label>Hasta<input type="date" id="cbHasta" max="${hoy}"></label>
+        <label>Cobrador<select id="cbQuien"><option value="yo">Yo</option><option value="todos">Todos</option>${usuarios.filter((u) => u !== String(PERFIL.email).toLowerCase()).map((u) => `<option value="${esc(u)}">${esc(nombreU(u))}</option>`).join('')}</select></label>
+        <label>Método<select id="cbMetodo"><option value="">Todos</option>${metodos.map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+      </div>
+      <label class="check"><input type="checkbox" id="cbAnul"> Mostrar también los recibos anulados</label>
+      <button class="btn secundario" id="cbHoy">${ic('reloj')}Volver a hoy</button>
+      <p class="sub">El celular guarda los cobros de los últimos 13 meses: funciona sin señal. Lo que está en la Cola aparece como "Sin enviar".</p>
+    </div>
+    <div id="cbRes"></div>`;
+  const ponerCampos = () => { $('#cbDesde').value = f.desde; $('#cbHasta').value = f.hasta; $('#cbQuien').value = f.quien; $('#cbMetodo').value = f.metodo; $('#cbAnul').checked = !!f.anulados;
+    if ($('#cbQuien').value !== f.quien) { f.quien = 'yo'; $('#cbQuien').value = 'yo'; } };
+  const panel = (abrir) => { f.abierto = abrir; $('#cbFiltros').hidden = !abrir; $('#cbCambiar').setAttribute('aria-expanded', abrir); };
+  async function pintar() {
+    if (f.desde > f.hasta) [f.desde, f.hasta] = [f.hasta, f.desde];
+    await kvSet('filtroCobros', f);
+    $('#cbTit').innerHTML = `${ic('cobrar')}${esc(quienTxt())} ${esc(titulo())}`;
+    const { items, total, recibos } = await cobrosEntre(f);
+    const suma = (clave) => { const o = {}; items.filter((x) => !x.anulado).forEach((x) => { const k = clave(x) || '—'; o[k] = o[k] || [0, 0]; o[k][0]++; o[k][1] = r2(o[k][1] + x.monto); }); return o; };
+    const tabla = (tit, o, fmt = (k) => k) => Object.keys(o).length > 1 ? `<h3>${tit}</h3><table class="resumen"><tbody>${Object.entries(o).map(([k, [n, v]]) =>
+      `<tr><td>${esc(fmt(k))} <small>(${n})</small></td><td>${soles(v)}</td></tr>`).join('')}</tbody></table>` : '';
+    const porDia = suma((x) => x.dia), porMet = suma((x) => x.metodo), porUsu = suma((x) => x.usuario);
+    const dias = Object.keys(porDia).length || 1;
+    const anulados = items.filter((x) => x.anulado);
+    $('#cbRes').innerHTML = `<h3 class="solo-imprimir">${esc(D.config.Negocio || 'D@NDINET')} · ${esc(quienTxt())} ${esc(titulo())}</h3>
+      <section class="hero"><span class="eyebrow">Total cobrado</span><span class="monto">${soles(total)}</span>
+        <span class="de">${recibos} recibo(s)${dias > 1 ? ` · ${dias} días con cobros · promedio ${soles(r2(total / dias))} por día` : ''}</span></section>
+      ${esHoy() ? '' : `<p class="sub no-imprimir"><button class="mini" id="cbHoy2">${ic('reloj')}Volver a mis cobros de hoy</button></p>`}
+      <div class="cb-tablas">
+        ${tabla('Por método', porMet) || (Object.keys(porMet).length ? `<table class="resumen"><tbody>${Object.entries(porMet).map(([k, [n, v]]) => `<tr><td>${esc(k)} <small>(${n})</small></td><td>${soles(v)}</td></tr>`).join('')}</tbody></table>` : '')}
+        ${f.quien === 'todos' ? tabla('Por cobrador', porUsu, nombreU) : ''}
+        ${tabla('Por día', porDia, (k) => txtFecha(k))}
+      </div>
+      ${anulados.length ? `<p class="sub">${anulados.length} recibo(s) anulado(s) por ${soles(r2(anulados.reduce((t, x) => t + x.monto, 0)))} (no suman al total).</p>` : ''}
+      <ul class="lista">${items.map((x) => `<li><a href="${x.id ? '#/recibo/' + esc(x.id) : '#/pago/' + encodeURIComponent(x.nro)}"><div><b>${esc(x.nro)}</b>
+        <small>${esc(x.cliente)} · ${esc(x.metodo)}${f.desde !== f.hasta ? ' · ' + esc(txtFecha(x.dia)) : ''}${f.quien !== 'yo' ? ' · ' + esc(nombreU(x.usuario)) : ''}</small></div>
+        <div class="der">${soles(x.monto)}${x.anulado ? `<span class="chip e-cortado">Anulado</span>` : x.estado !== 'ok' ? `<span class="chip e-porvencer">${ic('reloj')}Sin enviar</span>` : ''}</div></a></li>`).join('')
+        || `<li class="vacio">${esHoy() ? 'Aún no hay cobros hoy.' : 'No hay cobros con estos filtros.'}</li>`}</ul>
+      ${items.length ? `<button class="btn no-imprimir" id="cbImprimir">${ic('descargar')}Imprimir / PDF</button>` : ''}`;
+    if ($('#cbHoy2')) $('#cbHoy2').onclick = volverHoy;
+    if ($('#cbImprimir')) $('#cbImprimir').onclick = () => window.print();
+  }
+  const volverHoy = () => { f = Object.assign({}, def, { dia: hoy }); ponerCampos(); panel(false); pintar(); };
+  $('#cbCambiar').onclick = () => panel($('#cbFiltros').hidden);
+  $('#cbHoy').onclick = volverHoy;
+  vista().querySelectorAll('[data-rango]').forEach((b) => { b.onclick = () => { [f.desde, f.hasta] = RANGOS_COBRO[b.dataset.rango][1](hoy); f.rango = b.dataset.rango; ponerCampos(); pintar(); }; });
+  $('#cbDesde').onchange = () => { if ($('#cbDesde').value) { f.desde = $('#cbDesde').value; f.rango = ''; pintar(); } };
+  $('#cbHasta').onchange = () => { if ($('#cbHasta').value) { f.hasta = $('#cbHasta').value; f.rango = ''; pintar(); } };
+  $('#cbQuien').onchange = () => { f.quien = $('#cbQuien').value; pintar(); };
+  $('#cbMetodo').onchange = () => { f.metodo = $('#cbMetodo').value; pintar(); };
+  $('#cbAnul').onchange = () => { f.anulados = $('#cbAnul').checked; pintar(); };
+  ponerCampos();
+  panel(!!f.abierto && !esHoy());
+  REPINTAR = pintar;                         // tras sincronizar: cifras al día sin cerrar los filtros
+  await pintar();
 }
 
 // ---- A CORTAR (con filtros: zona, cuotas vencidas y orden) --------------------------
@@ -1815,9 +1908,15 @@ const AYUDA_MASIVO = 'Cómo se usa:\n1. Toque "Abrir WhatsApp": se abre el chat 
 const SALUDOS = ['Hola', 'Buen día', 'Saludos', 'Hola, buen día', 'Estimado(a)'];
 /** Cambia el saludo inicial según el cliente (mensajes no idénticos), si la plantilla empieza con "Hola". */
 const variarSaludo = (msg, n) => String(msg).replace(/^Hola\b/, SALUDOS[n % SALUDOS.length]);
-const mesTxt = (ym) => MESES_LARGO[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4);
+const mesTxt = (ym) => { const m = /^(\d{4})-(\d{2})/.exec(String(ym || '')); return m && MESES_LARGO[Number(m[2]) - 1] ? MESES_LARGO[Number(m[2]) - 1] + ' ' + m[1] : String(ym || '—'); };
 /** Mes que se recuerda: desde el día 20, el mes siguiente. */
 const mesCampana = campanaActual;
+/** Campañas en las que se puede seguir avisando: la actual y la anterior (el día 20 no se pierde lo que faltaba). */
+const campanasAbiertas = () => [mesCampana(), mesAnterior(mesCampana())];
+/** Marcas de aviso que el servidor rechazó (no quedaron registradas): se muestran para reintentar. */
+async function avisosRechazados() {
+  return (await colaTodos()).filter((o) => o.tipo === 'REGISTRAR_AVISO' && o.estadoLocal === 'rechazado' && !o.reintentado);
+}
 const telefonosOk = (c) => [...new Set([c.TELEFONO, c.TELEFONO2].map((t) => String(t || '').replace(/\D/g, '').slice(-9)).filter((t) => /^9\d{8}$/.test(t)))];
 /** Día (aaaa-mm-dd, hora de Lima) de una fecha guardada: el servidor la manda en UTC y el celular con -05:00. */
 const diaLima = (v) => {
@@ -1925,20 +2024,32 @@ function corregirNumero(id, sugerido = '') {
 
 async function vAvisos(arg) {
   if (arg === 'reporte' || /^reporte:/.test(arg || '')) return vReporteAvisos(String(arg).split(':')[1]);
-  const ym = mesCampana(), camp = ym;
-  let cand = candidatosAviso(ym);
-  // envío elegido por el técnico (desde el reporte): el cliente aparece aunque ya tenga resultado
-  let forzado = /^reenviar:/.test(arg || '') ? String(arg).slice(9) : null;
-  const itemDe = (id) => cand.find((z) => z.c.ID_CLIENTE === id) || (D.porId[id] ? itemAviso(D.porId[id], ym) : null);
-  const f = Object.assign({ zona: '', tipos: {}, limite: 40 }, (await kvGet('avisosFiltro')) || {});
+  const f = Object.assign({ zona: '', tipos: {}, limite: 40, camp: '', saltados: false }, (await kvGet('avisosFiltro')) || {});
   Object.keys(AV_TIPOS).forEach((k) => { if (f.tipos[k] === undefined) f.tipos[k] = true; });
+  // envío elegido por el técnico (desde el reporte): el cliente aparece aunque ya tenga resultado
+  const [fId, fCamp] = /^reenviar:/.test(arg || '') ? String(arg).slice(9).split(':') : [null, null];
+  let forzado = fId || null;
+  // (1.31.0) campaña elegible: la actual o la anterior; lo hecho no "vuelve a cero" el día 20
+  const abiertas = campanasAbiertas();
+  if (fCamp && abiertas.includes(fCamp)) f.camp = fCamp;
+  if (!abiertas.includes(f.camp)) f.camp = abiertas[0];
+  const ym = f.camp, camp = ym;
+  let cand = candidatosAviso(ym);
+  const itemDe = (id) => cand.find((z) => z.c.ID_CLIENTE === id) || (D.porId[id] ? itemAviso(D.porId[id], ym) : null);
   const yo = PERFIL.email, hoy = hoyISO();
   // cada mensaje real cuenta UNA vez (por su ID de marca), aunque la app se reinicie o los datos tarden en bajar
   const enviadosHoy = () => new Set((D.avisos || []).filter((a) => a.RESULTADO === 'ENVIADO' && diaLima(a.FECHA) === hoy &&
     (!a.USUARIO || a.USUARIO === yo)).map((a) => a.ID_SOLICITUD || a.ID_AVISO)).size;
   const zonas = [...new Set(cand.map((x) => x.c.ZONA).filter(Boolean))].sort();
-  const pendientes = () => { const h = resultadosCampana(camp);
-    return cand.filter((x) => !h[x.c.ID_CLIENTE] && f.tipos[x.tipo] && (!f.zona || x.c.ZONA === f.zona)); };
+  if (f.zona && !zonas.includes(f.zona)) f.zona = '';   // zona guardada que ya no existe: dejaba la lista vacía
+  // por avisar: sin resultado en la campaña; con "incluir saltados", los saltados van al final
+  const pendientes = () => { const h = resultadosCampana(camp), ok = (x) => f.tipos[x.tipo] && (!f.zona || x.c.ZONA === f.zona);
+    const sin = cand.filter((x) => !h[x.c.ID_CLIENTE] && ok(x));
+    return f.saltados ? sin.concat(cand.filter((x) => h[x.c.ID_CLIENTE] && h[x.c.ID_CLIENTE].RESULTADO === 'OMITIDO' && ok(x))) : sin; };
+  /** Avance de toda la campaña (no depende de los filtros ni de la sesión: sale de lo registrado). */
+  const avance = () => { const h = resultadosCampana(camp), conCel = cand.filter((x) => x.tels.length);
+    const at = conCel.filter((x) => h[x.c.ID_CLIENTE]).length, env = conCel.filter((x) => h[x.c.ID_CLIENTE] && h[x.c.ID_CLIENTE].RESULTADO === 'ENVIADO').length;
+    return { total: conCel.length, atendidos: at, enviados: env }; };
   const sinCel = cand.filter((x) => !x.tels.length).length;
   // cliente que quedó abierto en WhatsApp: si Android cerró la app, al volver se sigue con él
   let enCurso = await kvGet('avisoAbierto');
@@ -1954,6 +2065,8 @@ async function vAvisos(arg) {
   let marcaReenvio = (enCurso && enCurso.marca) || crypto.randomUUID();
   const filtros = `<div class="chips-mapa" role="group" aria-label="A quiénes">${Object.entries(AV_TIPOS).map(([k, [t, col, icn]]) =>
       `<button type="button" class="chip-mapa c-${col} ${f.tipos[k] ? 'sel' : ''}" data-tipo="${k}" aria-pressed="${!!f.tipos[k]}"><span class="mk mk-${col}">${ic(icn)}</span>${t}</button>`).join('')}</div>
+    <label>Campaña<select id="avCamp">${abiertas.map((k, j) => `<option value="${k}" ${k === camp ? 'selected' : ''}>${esc(mesTxt(k))}${j ? ' (anterior)' : ''}</option>`).join('')}</select></label>
+    <label class="check"><input type="checkbox" id="avSalt" ${f.saltados ? 'checked' : ''}> Volver a mostrar los saltados (al final)</label>
     <div class="av-fila2"><label>Zona<select id="avZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === f.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
       <label>Límite por día<input id="avLim" type="number" min="5" max="80" step="5" value="${Number(f.limite) || 40}" inputmode="numeric"></label></div>
     ${sinCel ? `<p class="sub">${sinCel} cliente(s) sin celular válido no aparecen: corríjalos en su ficha.</p>` : ''}`;
@@ -1968,6 +2081,9 @@ async function vAvisos(arg) {
   vista().querySelectorAll('[data-tipo]').forEach((b) => { b.onclick = () => { f.tipos[b.dataset.tipo] = !f.tipos[b.dataset.tipo];
     b.classList.toggle('sel', f.tipos[b.dataset.tipo]); b.setAttribute('aria-pressed', f.tipos[b.dataset.tipo]); guardarF(); pintar(); }; });
   $('#avZona').onchange = () => { f.zona = $('#avZona').value; guardarF(); pintar(); };
+  $('#avCamp').onchange = async () => { f.camp = $('#avCamp').value; await guardarF(); await kvSet('avisoAbierto', null); vAvisos(); };
+  $('#avSalt').onchange = () => { f.saltados = $('#avSalt').checked; guardarF(); pintar(); };
+  guardarF();
   $('#avLim').onchange = () => { f.limite = Math.min(80, Math.max(5, Number($('#avLim').value) || 40)); $('#avLim').value = f.limite; guardarF(); pintar(); };
   function pintar() {
     const caja = $('#avCaja');
@@ -1977,7 +2093,9 @@ async function vAvisos(arg) {
     if (forzado && actual !== forzado && !abierto) actual = forzado;
     if ((abierto || forzado) && actual && !lista.some((x) => x.c.ID_CLIENTE === actual)) { const y = itemDe(actual); if (y) lista.unshift(y); }
     const env = enviadosHoy(), lim = Number(f.limite) || 40, tope = env >= lim;
-    const cab = `<div class="av-progreso"><span>${esc(mesTxt(ym))} · <b>${lista.length}</b> por avisar</span><span class="${tope ? 'error' : ''}">Hoy <b>${env}</b>/${lim}</span></div>
+    const av = avance();
+    const cab = `<div class="av-avance"><span>Campaña <b>${esc(mesTxt(ym))}</b></span><span>Atendidos <b>${av.atendidos}</b> de ${av.total} · enviados <b>${av.enviados}</b></span></div>
+      <div class="av-progreso"><span><b>${lista.length}</b> por avisar${f.zona ? ' en ' + esc(f.zona) : ''}</span><span class="${tope ? 'error' : ''}">Hoy <b>${env}</b>/${lim}</span></div>
       <div class="barra"><i class="${tope ? 'peligro' : ''}" style="width:${Math.min(100, Math.round(env / lim * 100))}%"></i></div>`;
     if (!lista.length) { caja.innerHTML = cab + `<div class="tarjeta-form centro"><span class="mk mk-verde grande">${ic('check')}</span><p><b>No queda nadie por avisar</b> con estos filtros.</p>
       <a class="btn secundario" href="#/avisos/reporte">${ic('lista')}Ver saltados y pendientes</a></div>`; return; }
@@ -2062,16 +2180,19 @@ async function vAvisos(arg) {
     }
     caja.querySelectorAll('[data-res]').forEach((b) => { b.onclick = () => registrar(b.dataset.res); });
   }
+  // tras sincronizar: lista y conteos al día, sin perder el cliente en curso ni los filtros
+  REPINTAR = () => { if (ocupado) return; cand = candidatosAviso(ym); pintar(); };
   pintar();
 }
 
 /** Reporte: enviados, sin WhatsApp, saltados, números por corregir, quienes no desean y los que faltan. */
 async function vReporteAvisos(campSel) {
-  const camps = [...new Set((D.avisos || []).map((a) => a.CAMPANA).filter(Boolean).concat([mesCampana()]))].sort().reverse();
-  const camp = campSel || camps[0], actualCamp = camp === mesCampana();
+  const abiertas = campanasAbiertas();
+  const camps = [...new Set((D.avisos || []).map((a) => a.CAMPANA).filter((k) => /^\d{4}-\d{2}$/.test(k)).concat(abiertas))].sort().reverse();
+  const camp = camps.includes(campSel) ? campSel : mesCampana(), actualCamp = abiertas.includes(camp);   // actual o anterior: se puede seguir avisando
   const filtro = Object.assign({ res: 'ENVIADO', zona: '' }, (await kvGet('avisosReporte')) || {});
   if (filtro.res === 'FALTAN' && !actualCamp) filtro.res = 'ENVIADO';
-  let r, todos, cand, faltan, no, nums;
+  let r, todos, cand, faltan, no, nums, rech = await avisosRechazados();
   const calcular = () => {
     r = resultadosCampana(camp); todos = Object.values(r);
     cand = actualCamp ? candidatosAviso(camp) : [];
@@ -2079,27 +2200,46 @@ async function vReporteAvisos(campSel) {
     no = noDesean(); nums = numerosPendientes();
   };
   calcular();
-  const cuenta = (k) => (k === 'NO_ENVIAR' ? no.size : k === 'NUMERO' ? Object.keys(nums).length : k === 'FALTAN' ? faltan.length : todos.filter((a) => a.RESULTADO === k).length);
   const grupos = Object.assign({}, AV_RES, actualCamp ? { FALTAN: ['Faltan', 'azul', 'reloj'] } : {});
   const zonas = [...new Set(todos.map((a) => a.ZONA).concat(cand.map((x) => x.c.ZONA)).filter(Boolean))].sort();
+  if (filtro.zona && !zonas.includes(filtro.zona)) filtro.zona = '';   // zona que ya no existe: la lista salía vacía
+  if (filtro.res === 'RECHAZADO' && !rech.length) filtro.res = 'ENVIADO';
   vista().innerHTML = `<section><a class="volver no-imprimir" href="#/avisos">${ic('atras')}Recordatorio masivo</a>
     <h2 class="tit-ic">${ic('lista')}Reporte de avisos ${ayuda('Reporte', 'Último resultado de cada cliente en la campaña (mes del pago), de todos los técnicos después de sincronizar.\nToque los tres puntos de un cliente para enviarle el mensaje, marcar si se envió o corregir su número.\n"Faltan": todavía sin ningún resultado.')}</h2>
     <div class="filtros no-imprimir"><label>Campaña<select id="rpCamp">${camps.map((k) => `<option value="${esc(k)}" ${k === camp ? 'selected' : ''}>${esc(mesTxt(k))}</option>`).join('')}</select></label>
       <label>Zona<select id="rpZona"><option value="">Todas</option>${zonas.map((z) => `<option ${z === filtro.zona ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label></div>
+    <div id="rpRech" class="no-imprimir"></div>
     <div class="chips-mapa no-imprimir" id="rpChips" role="group" aria-label="Resultado"></div>
     <h3 class="solo-imprimir">${esc(D.config.Negocio || 'D@NDINET')} · Avisos de ${esc(mesTxt(camp))}</h3>
     <ul class="lista" id="rpLista"></ul>
     <div class="botones no-imprimir"><button class="btn" id="rpCopiar">${ic('compartir')}Copiar resumen</button><button class="btn" id="rpImprimir">${ic('descargar')}Imprimir / PDF</button></div></section>`;
-  const filas = () => {
+  const filas = (res = filtro.res) => {
     const base = (id, extra = {}) => { const c = D.porId[id] || {}; return Object.assign({ ID_CLIENTE: id, CLIENTE: c.NOMBRES, ZONA: c.ZONA }, extra); };
-    const l = filtro.res === 'NO_ENVIAR' ? [...no].map((id) => (D.avisos || []).filter((a) => a.ID_CLIENTE === id && a.RESULTADO === 'NO_ENVIAR').pop() || base(id))
-      : filtro.res === 'NUMERO' ? Object.values(nums)
-      : filtro.res === 'FALTAN' ? faltan.map((x) => base(x.c.ID_CLIENTE, { MONTO: x.monto, OBS: AV_TIPOS[x.tipo][0] }))
-      : todos.filter((a) => a.RESULTADO === filtro.res);
+    const l = res === 'NO_ENVIAR' ? [...no].map((id) => (D.avisos || []).filter((a) => a.ID_CLIENTE === id && a.RESULTADO === 'NO_ENVIAR').pop() || base(id))
+      : res === 'NUMERO' ? Object.values(nums)
+      : res === 'FALTAN' ? faltan.map((x) => base(x.c.ID_CLIENTE, { MONTO: x.monto, OBS: AV_TIPOS[x.tipo][0] }))
+      : todos.filter((a) => a.RESULTADO === res);
     return l.filter((a) => !filtro.zona || a.ZONA === filtro.zona)
       .sort((a, b) => String(a.ZONA).localeCompare(String(b.ZONA)) || String(a.CLIENTE).localeCompare(String(b.CLIENTE)));
   };
+  const cuenta = (k) => filas(k).length;   // el número del chip es el mismo que la lista (con la zona elegida)
+  const pintarRech = () => {
+    const caja = $('#rpRech');
+    if (!caja) return;
+    caja.innerHTML = rech.length ? `<div class="aviso error">${ic('alerta')}<span><b>${rech.length} marca(s) no se registraron</b> en el servidor
+      (${esc((rech[0].resultado && rech[0].resultado.mensaje) || 'rechazadas')}). <button class="mini" id="rpReint">${ic('sync')}Reintentar</button></span></div>` : '';
+    if ($('#rpReint')) $('#rpReint').onclick = async () => {
+      for (const o of rech) {
+        const { idSolicitud, estadoLocal, resultado, intentos, offline, fDispositivo, reintentado, ...limpio } = o;
+        await encolar(Object.assign(limpio, { usuarioLocal: PERFIL.email }));
+        o.reintentado = true; await colaPut(o);
+      }
+      aviso('Se volvieron a enviar. Revise el resultado en la Cola.');
+      rech = await avisosRechazados(); rehacer();
+    };
+  };
   const pintar = () => {
+    pintarRech();
     $('#rpChips').innerHTML = Object.entries(grupos).map(([k, [t, col, icn]]) =>
       `<button type="button" class="chip-mapa c-${col} ${filtro.res === k ? 'sel' : ''}" data-r="${k}" aria-pressed="${filtro.res === k}"><span class="mk mk-${col}">${ic(icn)}</span>${t} <b>${cuenta(k)}</b></button>`).join('');
     $('#rpChips').querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => { filtro.res = b.dataset.r; kvSet('avisosReporte', filtro); pintar(); }; });
@@ -2110,7 +2250,7 @@ async function vReporteAvisos(campSel) {
       || '<li class="vacio">Nadie en este grupo.</li>';
     $('#rpLista').querySelectorAll('[data-acc]').forEach((b) => { b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); acciones(b.dataset.acc); }; });
   };
-  const rehacer = () => { calcular(); pintar(); };
+  const rehacer = async () => { rech = await avisosRechazados(); calcular(); pintar(); };
   const acciones = (id) => {
     const c = D.porId[id] || {}, op = [];
     const marcar = (res, t) => async () => {
@@ -2126,7 +2266,7 @@ async function vReporteAvisos(campSel) {
       op.push({ t: 'Corregir el número ahora', icono: 'editar', fn: async () => { if (await corregirNumero(id, /^9\d{8}$/.test(n) ? n : '')) rehacer(); } });
       op.push({ t: 'Ya está corregido (quitar de la lista)', icono: 'check', fn: async () => { await marcarAviso(id, 'NUMERO_REVISADO', {}, 'Revisado'); aviso('Quitado de la lista.'); rehacer(); } });
     } else {
-      if (actualCamp && telefonosOk(c).length) op.push({ t: 'Enviar por WhatsApp', icono: 'chat', clase: 'verde', href: '#/avisos/reenviar:' + id });
+      if (actualCamp && telefonosOk(c).length) op.push({ t: 'Enviar por WhatsApp', icono: 'chat', clase: 'verde', href: '#/avisos/reenviar:' + id + ':' + camp });
       if (filtro.res !== 'ENVIADO') op.push({ t: 'Marcar: sí se envió', icono: 'check', fn: marcar('ENVIADO', 'Marcado como enviado.') });
       if (filtro.res !== 'SIN_WHATSAPP') op.push({ t: 'Marcar: no tiene WhatsApp', icono: 'alerta', fn: marcar('SIN_WHATSAPP', 'Marcado sin WhatsApp.') });
       op.push({ t: 'Corregir número', icono: 'celular', fn: async () => { if (await corregirNumero(id)) rehacer(); } });
@@ -2260,7 +2400,10 @@ function vFormCliente(id) {
       <div class="tarjeta-form"><h3 class="tit-ic">${ic('ajustes')}Instalación y gastos ${ayuda('Instalación', 'Opcional. Agregue lo que se cobra por la instalación: mano de obra, accesorios, materiales…\nSe suma en un solo cargo "Instalación" y el detalle queda anotado.')}</h3>
         <ul class="lista-limpia" id="cbInst"></ul><button type="button" class="mini" id="cbMas">${ic('agregar')}Agregar gasto</button></div>
       <div class="resumen-conv total-hoy">A cobrar al instalar <b id="cbTotal">S/ 0.00</b><small id="cbNota"></small></div>
-      <label class="check"><input type="checkbox" id="cbCobrar" checked> Abrir "Cobrar" al terminar</label>
+      <div class="tarjeta-form"><label class="check"><input type="checkbox" id="cbCobrar" checked> Cobrar ahora ${ayuda('Cobrar ahora', 'El recibo se hace en este momento, con o sin señal: no hay que esperar a que el cliente aparezca.\nSe envía solo junto con el alta y el número oficial (R-…) llega al sincronizar.\nSi el cliente paga menos, cambie el monto: se aplica primero al primer mes y luego a la instalación.')}</label>
+        <div id="cbPago"><div class="filtros"><label>Método<select id="cbMetodo">${metodosPago().map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+          <label>Monto recibido<input id="cbMonto" type="number" min="0" step="0.10" inputmode="decimal"></label></div>
+          <label id="cbOpWrap">N° de operación<input id="cbOperacion" inputmode="numeric" autocomplete="off"></label></div></div>
     </div>`}
 
     <div class="nav-pasos"><button class="btn" id="pAtras">${ic('atras')}Atrás</button><button class="btn verde" id="pSig">Siguiente${ic('flecha')}</button></div>
@@ -2395,9 +2538,16 @@ function vFormCliente(id) {
     const prim = [...vista().querySelectorAll('#cbMeses .pm-in')].reduce((t, x) => t + r2(Math.max(0, Number(x.value || 0))), 0);
     const inst = gastos().reduce((t, g) => t + g.monto, 0);
     $('#cbTotal').textContent = soles(prim + inst);
+    // el monto a cobrar sigue al total mientras el técnico no lo cambie a mano
+    if ($('#cbMonto') && !$('#cbMonto').dataset.mano) $('#cbMonto').value = r2(prim + inst).toFixed(2);
     $('#cbNota').textContent = `Primer mes ${soles(prim)}${inst ? ' + instalación ' + soles(inst) : ''}${Object.keys(manualPM).length ? ' (monto cambiado a mano)' : ''}`;
   }
-  if (!editar) { $('#cbMas').onclick = () => { agregarGasto(); }; }
+  if (!editar) {
+    $('#cbMas').onclick = () => { agregarGasto(); };
+    $('#cbMonto').oninput = () => { $('#cbMonto').dataset.mano = '1'; };
+    const verPago = () => { $('#cbPago').hidden = !$('#cbCobrar').checked; $('#cbOpWrap').hidden = $('#cbMetodo').value === 'Efectivo'; };
+    $('#cbCobrar').onchange = verPago; $('#cbMetodo').onchange = verPago; verPago();
+  }
 
   // ---- claves al editar ----
   if (editar) {
@@ -2468,23 +2618,24 @@ function vFormCliente(id) {
       pppoe: ppp, fechaInicio: fe, montoInstalacion: r2(inst.reduce((t, g) => t + g.monto, 0)), instalacion: inst,
       // monto del primer mes cambiado a mano (si no, el servidor calcula el prorrateo como siempre)
       montoPrimerMes: manualPM.inet, catv: s.catv && Object.assign({}, s.catv, manualPM.catv !== undefined ? { montoPrimerMes: manualPM.catv } : {}) } } });
-    const irCobrar = $('#cbCobrar').checked;
-    if (!navigator.onLine || !irCobrar) {
+    const monto = r2($('#cbMonto').value || 0), metodo = $('#cbMetodo').value;
+    if (!$('#cbCobrar').checked || !(monto > 0)) {
       aviso(navigator.onLine ? 'Cliente enviado. Aparecerá en la búsqueda en unos segundos.' : 'Guardado sin señal: se registrará al volver la conexión.');
       location.hash = '#/cola';
       return;
     }
-    // con señal: esperar el código del cliente nuevo y abrir Cobrar
-    vista().innerHTML = `<p class="aviso">${ic('sync', 'girando')}<span>Registrando al cliente…</span></p>`;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 1000));
-      const o = (await colaTodos()).find((x) => x.idSolicitud === op.idSolicitud);
-      const r = (o && o.resultado) || {}, idNuevo = (r.datos && r.datos.idCliente) || ((/Cliente (CLI-\d+)/.exec(r.mensaje || '') || [])[1]);
-      if (o && o.estadoLocal === 'rechazado') { aviso('El alta fue rechazada: revise la cola.', 'error'); location.hash = '#/cola'; return; }
-      if (idNuevo && D.porId[idNuevo]) { aviso('Cliente ' + idNuevo + ' registrado.'); location.hash = '#/cobrar/' + idNuevo; return; }
-    }
-    aviso('El alta sigue en la cola: cobre desde la ficha cuando aparezca.');
-    location.hash = '#/cola';
+    // (1.31.0) el cobro inicial se hace YA, sin esperar el código del cliente: el servidor lo enlaza con el alta
+    // (CARGOS = "ALTA:<id del alta>") y lo aplica al primer mes y a la instalación, en ese orden.
+    const pm = [...vista().querySelectorAll('#cbMeses .pm-in')].map((x) => ({ k: x.dataset.k, m: r2(Math.max(0, Number(x.value || 0))) }));
+    const per = fe.slice(0, 7), lineas = pm.map((x) => ({ SALDO: x.m, per, concepto: x.k === 'catv' ? 'TV CABLE' : nombreServicio(s.plan) || 'INTERNET' }))
+      .concat(inst.length ? [{ SALDO: r2(inst.reduce((t, g) => t + g.monto, 0)), per, concepto: 'INSTALACIÓN' }] : []);
+    const cobro = { tipo: 'COBRO', idCliente: '', cargos: ['ALTA:' + op.idSolicitud], monto, metodo, operacion: $('#cbOperacion').value.trim(), obs: 'Cobro al instalar',
+      fechaPago: hoyISO(), reciboProvisional: await siguienteProvisional(PERFIL.iniciales), refAlta: op.idSolicitud,
+      vista: { cliente: d.NOMBRES, doc: d.DNI_RUC, zona: d.ZONA, telefono: d.TELEFONO, usuario: PERFIL.nombre, saldoAntes: r2(lineas.reduce((t, l) => t + l.SALDO, 0)),
+        detalle: repartir(lineas, monto).map((x) => ({ periodo: txtPeriodo(x.cargo.per), per: x.cargo.per, concepto: x.cargo.concepto, aplicado: x.aplicado, parcial: x.parcial })) } };
+    await encolar(cobro);
+    aviso(navigator.onLine ? 'Cliente y cobro registrados: se envían solos.' : 'Guardado sin señal: el alta y el cobro se enviarán al volver la conexión.');
+    location.hash = '#/recibo/' + cobro.idSolicitud;
   }
   ir(0);
 }
@@ -3323,7 +3474,7 @@ async function ordenesLocales() {
       snap: d.SNAPSHOT || {}, obs: d.OBS, fEjec: d.F_EJEC })),
   }));
   const conocidas = new Set(lista.map((o) => o.solicitud).filter(Boolean));
-  cola.filter((o) => o.tipo === 'CREAR_ORDEN' && o.estadoLocal !== 'rechazado' && !conocidas.has(o.idSolicitud) && o.vista).forEach((o) => {
+  cola.filter((o) => o.tipo === 'CREAR_ORDEN' && o.estadoLocal !== 'rechazado' && o.estadoLocal !== 'ok' && !conocidas.has(o.idSolicitud) && o.vista).forEach((o) => {
     const res = o.resultado || {};
     lista.push({ ref: o.idSolicitud, id: (res.datos && res.datos.idOt) || 'PROVISIONAL', solicitud: o.idSolicitud, tipo: o.vista.tipo, estado: 'Pendiente',
       fecha: o.fDispositivo, usuario: PERFIL.email, detalle: o.vista.tipo === 'RUTA_CORTE' ? o.vista.items.length + ' cliente(s) a cortar'
@@ -3342,7 +3493,11 @@ async function ordenesLocales() {
     if (it && it.estado === 'Pendiente') { it.estado = op.datos.resultado === 'EJECUTADO' ? 'Ejecutado' : 'No ejecutado'; it.obs = op.motivo || ''; it.fEjec = op.fecha; it.sinEnviar = true; }
     if (ot.estado === 'Pendiente' && ot.items.every((x) => x.estado !== 'Pendiente')) ot.estado = 'Completada';
   });
-  return lista.sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  // (1.31.0) eliminadas desde este celular: fuera de la lista al instante (aunque aún no se envíe).
+  // Una orden ya PROCESADA que no vino en la descarga fue eliminada (por eso arriba no se toma de la cola).
+  const borradas = new Set(cola.filter((o) => o.tipo === 'ELIMINAR_ORDEN' && o.estadoLocal !== 'rechazado').map((o) => o.datos && o.datos.ref));
+  return lista.filter((o) => !borradas.has(o.ref) && !borradas.has(o.id) && !borradas.has(o.solicitud))
+    .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
 
 // ---- NUEVA ORDEN: para un cliente (buscador) o libre (sin cliente registrado / pendientes) -------
@@ -3627,6 +3782,7 @@ async function vOrden(ref) {
       <button class="mini" id="dDescargar">${ic('documento')}Descargar</button>
       ${o.estado === 'Pendiente' ? `<a class="mini" href="${esc(enlaceCalendario(o))}" target="_blank" rel="noopener">${ic('calendario')}Calendario</a>` : ''}
       ${o.estado === 'Pendiente' ? `<button class="mini rojo" id="dAnular">${ic('anular')}Anular</button>` : ''}
+      <button class="mini rojo" id="dEliminar">${ic('borrar')}Eliminar</button>
     </div>
     ${o.local ? '<p class="aviso no-imprimir">Orden sin enviar: el N° definitivo llegará al sincronizar. Ya puede imprimirla y trabajar con ella.</p>' : ''}
     ${o.sinEnviar ? '<p class="aviso no-imprimir">Hay marcas sin enviar en esta orden.</p>' : ''}
@@ -3681,6 +3837,19 @@ async function vOrden(ref) {
     const texto = textoOrden(o);
     if (navigator.share) { try { await navigator.share({ title: OT_TITULO[o.tipo] + ' ' + o.id, text: texto }); return; } catch (e) { if (e.name === 'AbortError') return; } }
     window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
+  };
+  $('#dEliminar').onclick = async () => {
+    const hecho = o.items.some((it) => it.estado === 'Ejecutado');
+    if (!(await confirmar(`La orden ${o.id} se BORRA del registro y no se puede recuperar.` +
+        (hecho ? '\n\nLo que ya se hizo con ella (cortes, cambios de plan) NO se deshace.' : '') +
+        (o.estado === 'Pendiente' ? '\n\nSi solo ya no se va a hacer, mejor use "Anular" (queda el registro).' : ''),
+        { titulo: '¿Eliminar la orden?', si: 'Eliminar', peligro: true }))) return;
+    const m = await pedirTexto('Motivo (queda anotado en la Bitácora):', { titulo: `Eliminar ${o.id}`, si: 'Eliminar', peligro: true });
+    if (m === null) return;
+    if (m.trim().length < 3) return aviso('Escriba el motivo.', 'error');
+    await encolar({ tipo: 'ELIMINAR_ORDEN', motivo: m.trim(), datos: { ref: refEnvio } });
+    aviso(navigator.onLine ? 'Orden eliminada.' : 'Guardado: se eliminará al volver la señal.');
+    location.hash = '#/ordenes';
   };
   if ($('#dAnular')) $('#dAnular').onclick = async () => {
     const m = await pedirTexto('Motivo de la anulación (los clientes pendientes no se tocan):', { titulo: `Anular ${o.id}`, si: 'Anular', peligro: true });
@@ -3831,7 +4000,12 @@ async function vMovimientos() {
     </div>
     <button class="btn no-imprimir" id="mImprimir">${ic('descargar')}Imprimir / PDF</button>
     <div id="mRes"><p class="aviso">Cargando…</p></div>`;
-  const pintar = (d, cache) => {
+  let ultimo = null;
+  const pintar = async (d, cache) => {
+    ultimo = [d, cache];
+    // (1.31.0) los eliminados desde este celular desaparecen al instante (aunque el reporte guardado sea anterior)
+    const borrados = new Set((await colaTodos()).filter((o) => o.tipo === 'ELIMINAR_MOVIMIENTO' && o.estadoLocal !== 'rechazado').map((o) => o.datos && o.datos.idHist));
+    d = Object.assign({}, d, { filas: d.filas.filter((x) => !borrados.has(x.idHist)) });
     const per = (d.filtros.mes ? MESES_TXT[d.filtros.mes - 1] + ' ' : '') + d.filtros.anio;
     $('#mRes').innerHTML = `<p class="sub">${esc(per)}${d.filtros.tipo ? ' · ' + esc(d.filtros.tipo) : ''}${d.filtros.zona ? ' · ' + esc(d.filtros.zona) : ''} ·
         ${d.total} movimiento(s)${cache ? ' (guardado, actualizando…)' : ''}${d.recortado ? ' · se muestran los 1500 más recientes' : ''}</p>
@@ -3839,9 +4013,26 @@ async function vMovimientos() {
         `<button class="mini ${t === d.filtros.tipo ? 'sel' : ''}" data-tipo="${esc(t)}">${esc(t)} (${n})</button>`).join('')}</div>
       <ul class="lista">${d.filas.map((x) => `<li><a href="#/cliente/${esc(x.id)}"><div><b>${esc(x.cliente)}</b>
         <small>${esc(txtFecha(x.fecha))} · ${esc(x.id)}${x.serv ? ' · ' + esc(x.serv) : ''} · ${esc(x.zona)}</small><small>${esc(x.detalle)}</small></div>
-        <div class="der"><span class="chip ${({ Corte: 'e-moroso', Baja: 'e-baja', Suspensión: 'e-susp', 'Pausa vacacional': 'e-susp', Reactivación: 'e-activo', Alta: 'e-activo' })[x.tipo] || 'e-pend'}">${esc(x.tipo)}</span></div></a></li>`).join('')
+        <div class="der"><span class="chip ${({ Corte: 'e-moroso', Baja: 'e-baja', Suspensión: 'e-susp', 'Pausa vacacional': 'e-susp', Reactivación: 'e-activo', Alta: 'e-activo' })[x.tipo] || 'e-pend'}">${esc(x.tipo)}</span>
+          ${x.idHist ? `<button class="mini icono no-imprimir" data-mov="${esc(x.idHist)}" aria-label="Opciones del movimiento de ${esc(x.cliente)}">${ic('puntos')}</button>` : ''}</div></a></li>`).join('')
         || '<li class="vacio">Sin movimientos con estos filtros.</li>'}</ul>`;
     $('#mRes').querySelectorAll('[data-tipo]').forEach((b) => { b.onclick = () => { $('#mT').value = b.dataset.tipo === d.filtros.tipo ? '' : b.dataset.tipo; cargar(); }; });
+    $('#mRes').querySelectorAll('[data-mov]').forEach((b) => { b.onclick = (e) => { e.preventDefault(); e.stopPropagation();
+      const x = d.filas.find((y) => y.idHist === b.dataset.mov);
+      menuOpciones(`${x.tipo} · ${x.cliente}`, [
+        { t: 'Ver la ficha', icono: 'usuario', href: '#/cliente/' + x.id },
+        { t: 'Eliminar del reporte', icono: 'borrar', fn: () => eliminarMov(x) },
+      ]); }; });
+  };
+  const eliminarMov = async (x) => {
+    if (!(await confirmar(`Se BORRA el movimiento "${x.tipo}" del ${txtFecha(x.fecha)} (${x.cliente}).\n\nEl cliente queda como está: esto no reactiva ni corta nada.`,
+      { titulo: '¿Eliminar del reporte?', si: 'Eliminar', peligro: true }))) return;
+    const m = await pedirTexto('Motivo (queda anotado en la Bitácora):', { titulo: 'Eliminar movimiento', si: 'Eliminar', peligro: true });
+    if (m === null) return;
+    if (m.trim().length < 3) return aviso('Escriba el motivo.', 'error');
+    await encolar({ tipo: 'ELIMINAR_MOVIMIENTO', motivo: m.trim(), datos: { idHist: x.idHist } });
+    aviso(navigator.onLine ? 'Movimiento eliminado.' : 'Guardado: se eliminará al volver la señal.');
+    if (ultimo) pintar(ultimo[0], ultimo[1]);
   };
   const cargar = async () => {
     Object.assign(f, { anio: Number($('#mA').value), mes: Number($('#mM').value), tipo: $('#mT').value, zona: $('#mZ').value });

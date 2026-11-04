@@ -457,6 +457,44 @@ textarea { resize: vertical; line-height: 1.45; }
   .modal.grande { height: 80dvh; }
 }
 
+/* ---- Computadora (1.31.0): menú lateral fijo y contenido más ancho; en el celular nada cambia ----------- */
+nav.inferior .solo-pc { display: none; }
+@media (min-width: 1024px) {
+  nav.inferior { top: 0; bottom: 0; left: 0; right: auto; transform: none; width: var(--ancho-lateral); display: flex; flex-direction: column; gap: 2px;
+    padding: calc(var(--alto-cabecera) + var(--e-4)) var(--e-3) var(--e-4); border: 0; border-right: 1px solid var(--c-linea); border-radius: 0; box-shadow: none; overflow-y: auto; }
+  nav.inferior a, nav.inferior a.solo-pc { display: flex; flex-direction: row; justify-content: flex-start; gap: var(--e-3); min-height: var(--toque-min);
+    padding: 0 var(--e-3); border-radius: var(--r-md); font-size: var(--t-sm); flex-shrink: 0; }
+  nav.inferior a .ic { width: 20px; height: 20px; }
+  nav.inferior a:hover { background: var(--c-superficie-2); }
+  nav.inferior a.activo { background: var(--c-primario-suave); color: var(--c-tinta); }
+  nav.inferior a.activo::before { top: 10px; bottom: 10px; left: 0; right: auto; width: 3px; height: auto; border-radius: 0 3px 3px 0; }
+  nav.inferior .insignia { position: static; margin-left: auto; }
+  nav.inferior .sep { display: block; margin: var(--e-4) var(--e-3) var(--e-1); font-size: var(--t-xs); font-weight: var(--w-semi); color: var(--c-tenue);
+    text-transform: uppercase; letter-spacing: 0.06em; }
+  .cabecera { z-index: calc(var(--z-nav) + 1); }
+  .cabecera-in { max-width: none; }
+  .estado, .actualizar { margin-left: var(--ancho-lateral); }
+  .vista { max-width: var(--ancho-max-pc); margin: 0 auto 0 calc(var(--ancho-lateral) + max(0px, (100% - var(--ancho-lateral) - var(--ancho-max-pc)) / 2));
+    padding: var(--e-8) var(--e-8) var(--e-10); }
+  .toast { left: calc(var(--ancho-lateral) + var(--e-4)); bottom: var(--e-4); }
+  /* formularios y documentos: un ancho cómodo de leer, aunque la pantalla sea grande */
+  .vista > section.form, .vista > .form, .vista > .doc, .vista > .barra-doc { max-width: 760px; }
+  /* rejillas más anchas */
+  .tarjetas { grid-template-columns: repeat(4, 1fr); }
+  .tarjetas-accion.dos { grid-template-columns: repeat(4, 1fr); }
+  .lista-datos { grid-template-columns: repeat(3, 1fr); }
+  .filtros { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .cb-tablas { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 var(--e-5); align-items: start; }
+  /* listas largas en dos columnas: buscar, cobros, reporte de avisos, movimientos, PPPoE, cola */
+  #res, #rpLista, #cbRes .lista, #mRes .lista, #ppLista, #cLista { display: grid; grid-template-columns: 1fr 1fr; }
+  #res li, #rpLista li, #cbRes .lista li, #mRes .lista li, #ppLista li, #cLista li { border-top: 1px solid var(--c-linea); }
+  #res li:nth-child(odd), #rpLista li:nth-child(odd), #cbRes .lista li:nth-child(odd), #mRes .lista li:nth-child(odd), #ppLista li:nth-child(odd), #cLista li:nth-child(odd) { border-right: 1px solid var(--c-linea); }
+  #res li:nth-child(-n+2), #rpLista li:nth-child(-n+2), #cbRes .lista li:nth-child(-n+2), #mRes .lista li:nth-child(-n+2), #ppLista li:nth-child(-n+2), #cLista li:nth-child(-n+2) { border-top: 0; }
+  .lista li.vacio { grid-column: 1 / -1; border-right: 0; }
+  .modal { max-width: 640px; }
+}
+@media print { .estado, .actualizar, .vista { margin-left: 0 !important; } }
+
 /* ---- Documentos imprimibles (órdenes, hojas de ruta). Plantilla del recibo PDF: colores --doc-* fijos ---- */
 .barra-doc { display: flex; flex-wrap: wrap; gap: var(--e-2); margin-bottom: var(--e-4); }
 .doc { background: var(--doc-blanco); color: var(--doc-tinta); border-radius: var(--r-lg); padding: var(--e-5) var(--e-4); box-shadow: var(--s-2);
@@ -792,6 +830,8 @@ i.punto.e-pend { background: var(--c-neutro); }
 /* ---- Recordatorio masivo por WhatsApp (1.26.0) ---- */
 .av-progreso { display: flex; justify-content: space-between; gap: var(--e-2); margin: var(--e-3) 0 var(--e-1); font-size: var(--t-sm); }
 .av-progreso .error { color: var(--c-peligro); }
+.cb-tablas h3 { margin-top: var(--e-3); }
+.av-avance { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--e-1) var(--e-3); padding: var(--e-2) var(--e-3); border-radius: var(--r-md); background: var(--c-superficie-2); font-size: var(--t-sm); }
 .av-tarjeta { margin-top: var(--e-3); }
 .av-cab { display: flex; gap: var(--e-3); align-items: flex-start; }
 .av-cab .mk { width: 40px; height: 40px; }
