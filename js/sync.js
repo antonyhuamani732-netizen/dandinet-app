@@ -11,6 +11,8 @@ import { aplicar, aplicarPendientes, ahoraISO } from './datos.js';
 let _enCurso = null;
 let _parcial = null;
 let _ultimoInicio = 0;
+// se registró algo mientras ya se sincronizaba: al terminar se envía enseguida (antes esperaba hasta 3 min)
+let _repetir = false;
 const oyentes = new Set();
 export const alCambiar = (fn) => oyentes.add(fn);
 const avisar = (info) => oyentes.forEach((fn) => { try { fn(info); } catch (e) { /* vista */ } });
@@ -67,7 +69,7 @@ async function limpiarPorCambioDeLibro(nuevo) {
 /** Envía la cola y luego descarga datos frescos. Evita ejecuciones simultáneas. */
 export function sincronizarTodo() {
   // una sincronización que lleva más de 3 minutos se da por perdida (antes trababa todo hasta cerrar la app)
-  if (_enCurso && Date.now() - _ultimoInicio < 180000) return _enCurso;
+  if (_enCurso && Date.now() - _ultimoInicio < 180000) { _repetir = true; return _enCurso; }
   _ultimoInicio = Date.now();
   _enCurso = (async () => {
     avisar({ tipo: 'inicio' });
@@ -90,7 +92,14 @@ export function sincronizarTodo() {
       avisar({ tipo: 'fin', ok: false, error: e });
       throw e;
     } finally {
-      if (_enCurso === yo) _enCurso = null;
+      if (_enCurso === yo) {
+        _enCurso = null;
+        if (_repetir) {
+          _repetir = false;
+          // solo si quedó algo por enviar (no se vuelve a bajar todo por gusto)
+          pendientesDeEnvio().then((p) => { if (p.length && navigator.onLine) sincronizarTodo().catch(() => {}); }).catch(() => {});
+        }
+      }
     }
   })();
   const yo = _enCurso;

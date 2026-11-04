@@ -2787,9 +2787,11 @@ function calcularAjuste(k, tipo, valor) {
 /**
  * Lista de meses con los mismos filtros que Cobrar: Vencidos / Todo / Ninguno, "Adelantar meses" (los futuros
  * se ocultan) y, si un mes tiene INTERNET + CATV, una sola fila por mes con "Ver por servicio".
+ * separar: true = una fila por servicio siempre (Ajustar: cada servicio tiene su propio precio; agruparlos
+ * hacía que un "cambio de precio" pusiera el mismo monto al INTERNET y al CATV).
  * marcar: 'vencidos' | 'ninguno'. Devuelve { elegidos(), total() } (solo cargos visibles y marcados).
  */
-function listaMeses(cont, cargos, { marcar = 'ninguno', alCambiar = () => {} } = {}) {
+function listaMeses(cont, cargos, { marcar = 'ninguno', alCambiar = () => {}, separar = false } = {}) {
   const hoyMes = hoyISO().slice(0, 7);
   const vencido = (k) => Number(k.DIAS_ATRASO) > 0 || k.ESTADO === 'Vencido';
   const fila = (k, marcado, hijo) => `<label class="cargo ${hijo ? 'hijo' : ''}">
@@ -2798,7 +2800,7 @@ function listaMeses(cont, cargos, { marcar = 'ninguno', alCambiar = () => {} } =
       <span class="det">${hijo ? esc(txtPeriodo(k.PERIODO)) : esc(nombreCargo(k))}${Number(k.PAGADO) > 0 ? ' · pagado ' + soles(k.PAGADO) : ''}</span>
       <span class="chip ${claseEstado(k.ESTADO)}">${esc(k.ESTADO)}</span><b>${soles(k.SALDO)}</b></label>`;
   const meses = [];
-  cargos.forEach((k) => { const ym = String(k.PERIODO).slice(0, 7), u = meses[meses.length - 1]; if (u && u.ym === ym) u.cargos.push(k); else meses.push({ ym, cargos: [k] }); });
+  cargos.forEach((k) => { const ym = String(k.PERIODO).slice(0, 7), u = meses[meses.length - 1]; if (!separar && u && u.ym === ym) u.cargos.push(k); else meses.push({ ym, cargos: [k] }); });
   const grupo = (g) => {
     const futuro = g.ym > hoyMes, marcado = marcar === 'vencidos' && g.cargos.some(vencido);
     const attrs = `class="mes-grupo ${futuro ? 'futuro' : ''}" ${futuro ? 'data-futuro="1"' : ''}`;
@@ -2887,15 +2889,17 @@ function vAjustar(id) {
     const filasP = sel.map((k) => ({ k, r: calcularAjuste(k, tipo, valor) }));
     const err = filasP.find((x) => x.r.error);
     if (err) { $('#ajPrev').innerHTML = `<p class="aviso error">${esc(err.r.error)}</p>`; return; }
+    const mesesDobles = tipo === 'CAMBIO' && new Set(sel.map((k) => String(k.PERIODO).slice(0, 7))).size < sel.length;
     const antes = filasP.reduce((t, x) => t + Number(x.k.SALDO || 0), 0);
     const despues = filasP.reduce((t, x) => t + (x.r.anular ? 0 : Math.max(0, x.r.nuevo - Number(x.k.PAGADO || 0))), 0);
     plan = filasP;
     $('#ajPrev').innerHTML = `<div class="hero calculo"><span class="eyebrow">Así quedaría</span>
       <table class="periodos"><tbody>${filasP.map((x) => `<tr><td>${esc(txtPeriodo(x.k.PERIODO))} ${esc(nombreCorto(x.k))}</td>
         <td>${soles(x.k.MONTO)} → ${x.r.anular ? 'anulado' : soles(x.r.nuevo)}</td></tr>`).join('')}</tbody></table>
-      <div class="totalr">Debe ${soles(antes)} → <b>${soles(despues)}</b></div></div>`;
+      <div class="totalr">Debe ${soles(antes)} → <b>${soles(despues)}</b></div></div>
+      ${mesesDobles ? `<p class="aviso">${ic('info')}<span>Marcó dos servicios del mismo mes: los dos quedarán con el mismo precio. Si cada uno tiene otro precio, haga un ajuste por servicio.</span></p>` : ''}`;
   };
-  lm = listaMeses($('#ajMeses'), cargos, { marcar: 'ninguno', alCambiar: pintar });
+  lm = listaMeses($('#ajMeses'), cargos, { marcar: 'ninguno', alCambiar: pintar, separar: true });
   vista().querySelectorAll('input[name="ajTipo"]').forEach((x) => { x.onchange = () => { $('#ajVal').value = ''; pintar(); }; });
   $('#ajVal').oninput = pintar;
   $('#ajMot').onchange = pintar;
