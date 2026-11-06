@@ -8,7 +8,7 @@ import {
   D, cargarDatosLocales, esc, soles, r2, txtPeriodo, txtFecha, hoyISO, metodosPago, buscarClientes, serviciosDe,
   cargosDe, repartir, pppoeDisponibles, plantilla, MSG_DEFECTO, enlaceWhatsApp, claseEstado, txtMora, prorrateoPlan,
   nombreServicio, nombreCargo, nombreCorto, ordenCargos, agruparLineas, serviciosDuo, detalleInstalacion,
-  detalleCobro, campanaActual, textoPlantilla, mesAnterior,
+  detalleCobro, campanaActual, textoPlantilla, mesAnterior, esProvisional, traducirProvisional,
 } from './datos.js';
 import { ic, observarIconos } from './iconos.js';
 
@@ -177,11 +177,16 @@ function aviso(msg, tipo = 'ok') {
 // ============================================================================
 function enrutar(op = {}) {
   const [ruta, arg] = (location.hash.replace(/^#\//, '') || 'inicio').split('/');
+  // (1.32.0) cliente creado sin señal que ya llegó al servidor: se abre con su código real (CLI-…)
+  if (arg && arg.indexOf('NUEVO-') >= 0) {
+    const real = traducirProvisional(decodeURIComponent(arg));
+    if (real !== decodeURIComponent(arg)) { location.replace('#/' + ruta + '/' + encodeURIComponent(real)); return Promise.resolve(); }
+  }
   RUTA = ruta;
   REPINTAR = null;
   document.querySelectorAll('nav.inferior a').forEach((a) => a.classList.toggle('activo', a.dataset.r === ruta));
   const v = { inicio: vInicio, buscar: vBuscar, cliente: vCliente, cobrar: vCobrar, recibo: vRecibo, cola: vCola,
-    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, ajustar: vAjustar, ecuenta: vEstadoCuenta, convenio: vConvenio, convenios: vConvenios, ordenserv: vOrdenServicio, nuevaorden: vNuevaOrden, nuevoserv: vNuevoServicio, editserv: vEditarServicio, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos, negocio: vNegocio,
+    hoy: vHoy, cortar: vACortar, corte: vCorte, reactivar: vReactivar, cuenta: vCuenta, pago: vPago, ajustar: vAjustar, deudaant: vDeudaAnterior, ecuenta: vEstadoCuenta, convenio: vConvenio, convenios: vConvenios, ordenserv: vOrdenServicio, nuevaorden: vNuevaOrden, nuevoserv: vNuevoServicio, editserv: vEditarServicio, plan: vCambiarPlan, pausa: vPausa, ordenes: vOrdenes, orden: vOrden, movimientos: vMovimientos, negocio: vNegocio,
     mas: vMas, mapa: vMapaGeneral, guia: vGuia, avisos: vAvisos, perfil: vPerfil, recordatorios: vRecordatorios, dashboard: vDashboard, config: vConfig, nuevo: vFormCliente, editar: vFormCliente, pppoe: vPPPoE, asignar: vAsignarPPPoE }[ruta] || vInicio;
   if (!op.conservar) { window.scrollTo(0, 0); cerrarModal(); }
   return Promise.resolve(v(decodeURIComponent(arg || ''))).catch((e) => { vista().innerHTML = `<p class="error">${esc(e.message)}</p>`; });
@@ -369,7 +374,8 @@ async function vCliente(id) {
   vista().innerHTML = `
     <section class="ficha">
       <h2>${esc(c.NOMBRES)}</h2>
-      <p class="sub">${esc(id)} · DNI/RUC ${esc(c.DNI_RUC)} · <span class="chip ${claseEstado(r.ESTADO)}">${esc(r.ESTADO)}</span></p>
+      <p class="sub">${esProvisional(id) ? '<span class="chip e-pend">Nuevo · sin enviar</span>' : esc(id)} · DNI/RUC ${esc(c.DNI_RUC)} · <span class="chip ${claseEstado(r.ESTADO)}">${esc(r.ESTADO)}</span></p>
+      ${esProvisional(id) ? `<p class="aviso">${ic('info')}<span>Cliente creado en este celular. Puede cobrarle y editarlo ya: todo se envía solo al volver la señal y entonces recibe su código (CLI-…).</span></p>` : ''}
       <div class="deuda ${Number(r.DEUDA_VENCIDA) > 0 ? 'roja' : 'verde'}">
         <span>Deuda vencida</span><b>${soles(r.DEUDA_VENCIDA)}</b><small>${r.MESES_ADEUDA || 0} mes(es) · ${Number(r.DIAS_ATRASO) > 0 ? txtMora(r.DIAS_ATRASO) + ' de atraso' : 'al día'}${r.ALERTA ? ' · ' + esc(r.ALERTA) : ''}</small>
       </div>
@@ -706,8 +712,8 @@ async function vCobrar(id) {
   vista().innerHTML = `
     <section class="cobro">
       <h2>Cobrar · ${esc(c.NOMBRES)}</h2>
-      <p class="sub">${esc(id)} · ${esc(c.ZONA)}</p>
-      ${D.cargos.some((k) => k.ID_CLIENTE === id && k._pend) ? '<p class="aviso">Hay cobros de este cliente en la cola de envío: lo ya cobrado no se muestra (o solo su resto).</p>' : ''}
+      <p class="sub">${esProvisional(id) ? 'Nuevo · sin enviar' : esc(id)} · ${esc(c.ZONA)}</p>
+      ${D.cargos.some((k) => k.ID_CLIENTE === id && (k._cobros || []).length) ? '<p class="aviso">Hay cobros de este cliente en la cola de envío: lo ya cobrado no se muestra (o solo su resto).</p>' : ''}
       <div class="acciones-sel">
         <button type="button" class="mini" id="selVenc">Vencidos</button>
         <button type="button" class="mini" id="selTodo">Todo</button>
@@ -821,7 +827,7 @@ async function vCobrar(id) {
 async function vRecibo(idSol) {
   const op = (await colaTodos()).find((o) => o.idSolicitud === idSol);
   const alta = op && !op.idCliente && op.refAlta ? (await colaTodos()).find((x) => x.idSolicitud === op.refAlta) : null;
-  const idCli = op && (op.idCliente || (alta && (/Cliente (CLI-\d+)/.exec((alta.resultado || {}).mensaje || '') || [])[1]) || '');
+  const idCli = op && (traducirProvisional(op.idCliente) || (alta && (/Cliente (CLI-\d+)/.exec((alta.resultado || {}).mensaje || '') || [])[1]) || '');
   if (!op) { vista().innerHTML = '<p class="error">Recibo no encontrado.</p>'; return; }
   const v = op.vista || {}, res = op.resultado || {};
   const oficial = op.estadoLocal === 'ok' && res.nroRecibo;
@@ -1298,7 +1304,7 @@ async function vCola() {
     <button class="btn" id="btnSync">${ic('enviado')}Enviar ahora</button>
     <ul class="lista">${cola.map((o) => {
       const res = o.resultado || {}, cli = D.porId[o.idCliente] || {};
-      const nombres = { EDITAR_SERVICIO: 'Corregir servicio', GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', ELIMINAR_ORDEN: 'Eliminar orden', ELIMINAR_MOVIMIENTO: 'Eliminar movimiento', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', AJUSTAR_CARGOS: 'Ajuste de cuenta', CREAR_CONVENIO: 'Convenio / castigo', REVERTIR_CONVENIO: 'Revertir convenio', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
+      const nombres = { EDITAR_SERVICIO: 'Corregir servicio', GUARDAR_CONFIG: 'Datos del negocio', EDITAR_PPPOE: 'Editar PPPoE', CREAR_ORDEN: 'Orden / hoja de ruta', CERRAR_ITEM_ORDEN: 'Marcar en orden', ANULAR_ORDEN: 'Anular orden', ELIMINAR_ORDEN: 'Eliminar orden', ELIMINAR_MOVIMIENTO: 'Eliminar movimiento', PAUSA_VACACIONES: 'Pausa vacacional', TERMINAR_PAUSA: 'Fin de pausa', CAMBIAR_PLAN: 'Cambio de plan', NUEVO_SERVICIO: 'Nuevo servicio', AJUSTAR_CARGOS: 'Ajuste de cuenta', DEUDA_ANTERIOR: 'Deuda anterior', CREAR_CONVENIO: 'Convenio / castigo', REVERTIR_CONVENIO: 'Revertir convenio', RENOVAR_ANIO: 'Renovar contrato', ALTA_CLIENTE: 'Nuevo cliente', EDITAR_CLIENTE: 'Editar cliente', ANULAR_PAGO: 'Anular recibo', CORTAR: 'Corte',
         SUSPENDER: 'Suspensión', BAJA: 'Baja', REACTIVAR: 'Reactivación', ASIGNAR_PPPOE: 'Asignar PPPoE', LIBERAR_PPPOE: 'Liberar PPPoE',
         BLOQUEAR_PPPOE: 'Bloquear PPPoE', DESBLOQUEAR_PPPOE: 'Desbloquear PPPoE', AGREGAR_PPPOE: 'Agregar PPPoE', REGISTRAR_AVISO: 'Aviso WhatsApp' };
       const detalle = o.tipo === 'ALTA_CLIENTE' ? ((o.datos || {}).cliente || {}).NOMBRES : o.tipo === 'ANULAR_PAGO' ? o.nroRecibo
@@ -2374,7 +2380,11 @@ function vFormCliente(id) {
       <div class="tarjeta-form"><h3 class="tit-ic">${ic('router')}Servicio a contratar</h3>
       <label>Plan *<select id="s_plan"><option value="">— elegir —</option>${planes.map((p) => `<option data-t="${Number(p.TARIFA)}">${esc(p.PLAN)}</option>`).join('')}</select></label>
       <div class="dos"><label>Precio al mes (S/) *<input id="s_tarifa" type="number" step="0.10" inputmode="decimal"></label>
-        <label>Inicio<input id="s_inicio" type="date" value="${hoyISO()}"></label></div>
+        <label>Inicio<input id="s_inicio" type="date" value="${hoyISO()}" min="${sumarMesTxt(hoyISO().slice(0, 7), -36)}-01"></label></div>
+      <label class="check"><input type="checkbox" id="s_antiguo"> Ya tenía servicio (cliente antiguo) ${ayuda('Cliente antiguo', AYUDA_DEUDA_ANT)}</label>
+      <div id="s_antWrap" hidden><div class="dos"><label>Debe hasta (mes)<input id="s_antHasta" type="month" value="${sumarMesTxt(hoyISO().slice(0, 7), -1)}" max="${sumarMesTxt(hoyISO().slice(0, 7), -1)}"></label>
+        <label>Deuda anterior (S/)<input id="s_antMonto" type="number" min="0" step="0.10" inputmode="decimal"></label></div>
+        <p class="sub" id="s_antNota"></p></div>
       <label>Modo / equipo<select id="s_modo"><option value=""></option>${lst('MODO').map((m) => `<option>${esc(m)}</option>`).join('')}</select></label></div>
       <div class="tarjeta-form" id="s_duoBox" hidden><h3 class="tit-ic">${ic('tv')}Internet + TV cable ${ayuda('Paquete DUO', AYUDA_DUO)}</h3>
         <label class="check"><input type="checkbox" id="s_catv" checked> <span id="s_catvTxt">Separar en INTERNET + CATV</span></label>
@@ -2440,6 +2450,11 @@ function vFormCliente(id) {
       if (!(s.tarifa > 0)) return 'El precio debe ser mayor a 0.';
       if (s.catv && !(s.catv.tarifa > 0)) return 'El precio del CATV debe ser mayor a 0.';
       if (s.catv && !s.plan) return 'Elija el plan del internet.';
+      if ($('#s_antiguo').checked) {
+        const h = $('#s_antHasta').value;
+        if (!/^\d{4}-\d{2}$/.test(h) || h >= hoyISO().slice(0, 7)) return 'Cliente antiguo: el mes de la deuda debe ser uno que ya pasó.';
+        if (!(Number($('#s_antMonto').value || 0) >= 0)) return 'Deuda anterior inválida.';
+      }
     }
     return '';
   };
@@ -2540,13 +2555,28 @@ function vFormCliente(id) {
     $('#cbTotal').textContent = soles(prim + inst);
     // el monto a cobrar sigue al total mientras el técnico no lo cambie a mano
     if ($('#cbMonto') && !$('#cbMonto').dataset.mano) $('#cbMonto').value = r2(prim + inst).toFixed(2);
-    $('#cbNota').textContent = `Primer mes ${soles(prim)}${inst ? ' + instalación ' + soles(inst) : ''}${Object.keys(manualPM).length ? ' (monto cambiado a mano)' : ''}`;
+    const ant = $('#s_antiguo') && $('#s_antiguo').checked ? r2(Number($('#s_antMonto').value || 0)) : 0;
+    $('#cbNota').textContent = `Primer mes ${soles(prim)}${inst ? ' + instalación ' + soles(inst) : ''}${Object.keys(manualPM).length ? ' (monto cambiado a mano)' : ''}` +
+      ($('#s_antiguo') && $('#s_antiguo').checked ? ` · Cliente antiguo: además debe${ant > 0 ? ' la deuda anterior ' + soles(ant) + ' y' : ''} los meses hasta hoy (cóbrelos desde Cobrar).` : '');
   }
   if (!editar) {
     $('#cbMas').onclick = () => { agregarGasto(); };
     $('#cbMonto').oninput = () => { $('#cbMonto').dataset.mano = '1'; };
     const verPago = () => { $('#cbPago').hidden = !$('#cbCobrar').checked; $('#cbOpWrap').hidden = $('#cbMetodo').value === 'Efectivo'; };
     $('#cbCobrar').onchange = verPago; $('#cbMetodo').onchange = verPago; verPago();
+    // cliente antiguo: el inicio es el mes siguiente a su deuda (mes completo); la deuda va en un solo cargo
+    const verAntiguo = () => {
+      const on = $('#s_antiguo').checked, h = $('#s_antHasta').value;
+      $('#s_antWrap').hidden = !on; $('#s_inicio').readOnly = on;
+      if (on && /^\d{4}-\d{2}$/.test(h)) {
+        $('#s_inicio').value = sumarMesTxt(h, 1) + '-01';
+        const m = r2(Number($('#s_antMonto').value || 0));
+        $('#s_antNota').textContent = `Cobra normal desde ${txtPeriodo(sumarMesTxt(h, 1) + '-01')}` + (m > 0 ? ` · deuda anterior ${soles(m)} en un solo cargo.` : '.');
+      }
+      if (on && $('#cbCobrar').checked) { $('#cbCobrar').checked = false; verPago(); }
+      pintarCobro();
+    };
+    $('#s_antiguo').onchange = verAntiguo; $('#s_antHasta').onchange = verAntiguo; $('#s_antMonto').oninput = verAntiguo;
   }
 
   // ---- claves al editar ----
@@ -2611,25 +2641,30 @@ function vFormCliente(id) {
     }
     const s = servicio(), inst = gastos(), fe = $('#s_inicio').value || hoyISO();
     const ppp = $('#s_pppWrap').hidden ? '' : $('#s_pppoe').value;
+    const antiguo = $('#s_antiguo').checked, deudaAnt = antiguo ? r2(Number($('#s_antMonto').value || 0)) : 0;
     if (!(await confirmar(`${d.NOMBRES}\n${s.plan} · ${soles(s.tarifa)}/mes` + (s.catv ? `\n+ SERVICIO DE CATV · ${soles(s.catv.tarifa)}/mes` : '') +
-      (ppp ? `\nPPPoE ${ppp}` : '') + `\nA cobrar al instalar: ${$('#cbTotal').textContent}`, { titulo: '¿Registrar cliente?', si: 'Registrar' }))) return;
+      (ppp ? `\nPPPoE ${ppp}` : '') + (antiguo ? `\nCliente antiguo: cobra desde ${txtPeriodo(fe)}` + (deudaAnt > 0 ? ` + deuda anterior ${soles(deudaAnt)}` : '') : '') +
+      `\nA cobrar al instalar: ${$('#cbTotal').textContent}`, { titulo: '¿Registrar cliente?', si: 'Registrar' }))) return;
     d.FECHA_ALTA = fe;
     const op = await encolar({ tipo: 'ALTA_CLIENTE', datos: { cliente: d, servicio: { plan: s.plan, tarifa: s.tarifa, modo: $('#s_modo').value,
       pppoe: ppp, fechaInicio: fe, montoInstalacion: r2(inst.reduce((t, g) => t + g.monto, 0)), instalacion: inst,
       // monto del primer mes cambiado a mano (si no, el servidor calcula el prorrateo como siempre)
-      montoPrimerMes: manualPM.inet, catv: s.catv && Object.assign({}, s.catv, manualPM.catv !== undefined ? { montoPrimerMes: manualPM.catv } : {}) } } });
+      montoPrimerMes: manualPM.inet, deudaAnterior: deudaAnt > 0 ? { monto: deudaAnt, hasta: $('#s_antHasta').value } : undefined, catv: s.catv && Object.assign({}, s.catv, manualPM.catv !== undefined ? { montoPrimerMes: manualPM.catv } : {}) } } });
     const monto = r2($('#cbMonto').value || 0), metodo = $('#cbMetodo').value;
     if (!$('#cbCobrar').checked || !(monto > 0)) {
-      aviso(navigator.onLine ? 'Cliente enviado. Aparecerá en la búsqueda en unos segundos.' : 'Guardado sin señal: se registrará al volver la conexión.');
-      location.hash = '#/cola';
+      aviso(navigator.onLine ? 'Cliente registrado: se envía solo.' : 'Cliente guardado en el celular: se enviará al volver la señal.');
+      location.hash = '#/cliente/NUEVO-' + op.idSolicitud;   // (1.32.0) se sigue trabajando con él al instante
       return;
     }
-    // (1.31.0) el cobro inicial se hace YA, sin esperar el código del cliente: el servidor lo enlaza con el alta
-    // (CARGOS = "ALTA:<id del alta>") y lo aplica al primer mes y a la instalación, en ese orden.
+    // (1.32.0) el cobro inicial va sobre las cuotas PROVISIONALES del cliente nuevo (instalación y primer mes):
+    // baja la deuda al instante en el celular y el servidor cambia los códigos por los reales al recibirlo.
     const pm = [...vista().querySelectorAll('#cbMeses .pm-in')].map((x) => ({ k: x.dataset.k, m: r2(Math.max(0, Number(x.value || 0))) }));
     const per = fe.slice(0, 7), lineas = pm.map((x) => ({ SALDO: x.m, per, concepto: x.k === 'catv' ? 'TV CABLE' : nombreServicio(s.plan) || 'INTERNET' }))
       .concat(inst.length ? [{ SALDO: r2(inst.reduce((t, g) => t + g.monto, 0)), per, concepto: 'INSTALACIÓN' }] : []);
-    const cobro = { tipo: 'COBRO', idCliente: '', cargos: ['ALTA:' + op.idSolicitud], monto, metodo, operacion: $('#cbOperacion').value.trim(), obs: 'Cobro al instalar',
+    const idProv = 'NUEVO-' + op.idSolicitud, ksProv = D.cargos.filter((k) => k.ID_CLIENTE === idProv);
+    const perIni = ksProv.filter((k) => k.CONCEPTO === 'MENSUALIDAD').map((k) => String(k.PERIODO).slice(0, 7)).sort()[0];
+    const cargosIni = ksProv.filter((k) => k.CONCEPTO === 'INSTALACION' || (k.CONCEPTO === 'MENSUALIDAD' && String(k.PERIODO).slice(0, 7) === perIni)).map((k) => k.ID_CARGO);
+    const cobro = { tipo: 'COBRO', idCliente: idProv, cargos: cargosIni.length ? cargosIni : ['ALTA:' + op.idSolicitud], monto, metodo, operacion: $('#cbOperacion').value.trim(), obs: 'Cobro al instalar',
       fechaPago: hoyISO(), reciboProvisional: await siguienteProvisional(PERFIL.iniciales), refAlta: op.idSolicitud,
       vista: { cliente: d.NOMBRES, doc: d.DNI_RUC, zona: d.ZONA, telefono: d.TELEFONO, usuario: PERFIL.nombre, saldoAntes: r2(lineas.reduce((t, l) => t + l.SALDO, 0)),
         detalle: repartir(lineas, monto).map((x) => ({ periodo: txtPeriodo(x.cargo.per), per: x.cargo.per, concepto: x.cargo.concepto, aplicado: x.aplicado, parcial: x.parcial })) } };
@@ -3062,6 +3097,60 @@ const AJ_AYUDA = 'Descuento S/: resta un monto fijo a cada mes marcado.\nEj.: me
   'Anular: el mes sale de la deuda, como si no se hubiera cobrado. Solo si no tiene pagos.\nEj.: se cobró un mes en que no tuvo servicio.\n\n' +
   'Cambio de precio: el mes pasa a valer otro monto.\nEj.: se cobró S/ 75 por error y era S/ 50.\n\nTodo queda registrado con su motivo.';
 
+// ---- DEUDA ANTERIOR (cliente antiguo que no estaba registrado, 1.32.0) -----------------------
+const AYUDA_DEUDA_ANT = 'Para un cliente que ya tenía servicio pero no estaba registrado.\nLo que debía hasta el mes indicado queda en UN solo cargo "DEUDA ANTERIOR" (cuenta como deuda vencida y se cobra como cualquier mes, también en partes).\nDesde el mes siguiente se cobra normal, mes completo, sin prorrateo.';
+function vDeudaAnterior(id) {
+  const c = D.porId[id];
+  if (!c) { vista().innerHTML = '<p class="error">Cliente no encontrado.</p>'; return; }
+  const servs = D.servicios.filter((s) => s.ID_CLIENTE === id && s.ESTADO !== 'Baja');
+  const prev = sumarMesTxt(hoyISO().slice(0, 7), -1);
+  vista().innerHTML = `<section class="form"><h2 class="tit-ic">Deuda anterior ${ayuda('Deuda anterior', AYUDA_DEUDA_ANT)}</h2>
+    <p class="sub">${esc(c.NOMBRES)} · ${esc(id)}</p>
+    ${servs.length ? `<label>Servicio<select id="daServ">${servs.map((s) => `<option value="${esc(s.ID_SERV)}">${esc(nombreServicio(s.PLAN))} · ${soles(s.TARIFA)}/mes · ${esc(s.ESTADO)} (${esc(s.ID_SERV)})</option>`).join('')}</select></label>
+    <div class="dos"><label>Debe hasta (mes)<input id="daHasta" type="month" value="${prev}" max="${prev}"></label>
+      <label>Deuda anterior (S/)<input id="daMonto" type="number" min="0" step="0.10" inputmode="decimal"></label></div>
+    <label class="check"><input type="checkbox" id="daReg" checked> <span id="daRegTxt">Cobrar normal desde el mes siguiente</span></label>
+    <label>Motivo<input id="daMot" value="Cliente antiguo: deuda acumulada antes de registrarlo"></label>
+    <div id="daPrev"></div>
+    <button class="btn grande verde" id="ok">${ic('check')}Registrar</button>` : '<p class="vacio">El cliente no tiene servicios vigentes.</p>'}
+    <a class="btn secundario" href="#/cliente/${esc(id)}">Cancelar</a></section>`;
+  if (!servs.length) return;
+  const calc = () => {
+    const s = servs.find((x) => x.ID_SERV === $('#daServ').value), hasta = $('#daHasta').value, monto = r2(Number($('#daMonto').value || 0));
+    const reg = $('#daReg').checked, desde = /^\d{4}-\d{2}$/.test(hasta) ? sumarMesTxt(hasta, 1) : '';
+    const ks = D.cargos.filter((k) => k.ID_SERV === s.ID_SERV && k.CONCEPTO === 'MENSUALIDAD' && Number(k.PAGADO || 0) <= 0.004);
+    const anular = reg && desde ? ks.filter((k) => String(k.PERIODO).slice(0, 7) < desde) : [];
+    return { s, hasta, monto, reg, desde, anular };
+  };
+  const pintar = () => {
+    const x = calc();
+    $('#daRegTxt').textContent = x.desde ? `Cobrar normal desde ${txtPeriodo(x.desde + '-01')} (${soles(x.s.TARIFA)} al mes)` : 'Cobrar normal desde el mes siguiente';
+    if (!x.desde) { $('#daPrev').innerHTML = ''; return; }
+    const lineas = [];
+    if (x.monto > 0) lineas.push(`Un cargo <b>DEUDA ANTERIOR</b> hasta ${esc(txtPeriodo(x.hasta + '-01'))}: <b>${soles(x.monto)}</b>`);
+    if (x.reg) {
+      lineas.push(`Desde ${esc(txtPeriodo(x.desde + '-01'))}: mes completo de ${soles(x.s.TARIFA)} hasta diciembre (se crean los meses que falten).`);
+      if (x.anular.length) lineas.push(`${x.anular.length} mes(es) sin pagos hasta ${esc(txtPeriodo(x.hasta + '-01'))} (${soles(x.anular.reduce((t, k) => t + Number(k.SALDO || 0), 0))}) se anulan: quedan incluidos en la deuda anterior.`);
+    }
+    $('#daPrev').innerHTML = lineas.length ? `<div class="hero calculo"><span class="eyebrow">Así quedaría</span><ul class="lista-simple">${lineas.map((l) => `<li>${l}</li>`).join('')}</ul></div>` : '';
+  };
+  ['daServ', 'daHasta', 'daMonto', 'daReg'].forEach((k) => { $('#' + k).oninput = pintar; $('#' + k).onchange = pintar; });
+  pintar();
+  $('#ok').onclick = async () => {
+    const x = calc(), mot = $('#daMot').value.trim();
+    if (!x.desde) return aviso('Indique hasta qué mes debe.', 'error');
+    if (x.hasta > prev) return aviso('La deuda anterior debe ser de un mes que ya pasó.', 'error');
+    if (!(x.monto > 0) && !x.reg) return aviso('Escriba el monto de la deuda anterior.', 'error');
+    if (mot.length < 5) return aviso('Escriba el motivo.', 'error');
+    if (x.reg && x.s.ESTADO !== 'Activo') return aviso('Para cobrar normal el servicio debe estar Activo. Reactívelo primero o desmarque la casilla.', 'error');
+    if (!(await confirmar($('#daPrev').innerText, { titulo: '¿Registrar la deuda anterior?', si: 'Registrar' }))) return;
+    await encolar({ tipo: 'DEUDA_ANTERIOR', idCliente: id, idServ: x.s.ID_SERV, motivo: mot,
+      datos: { idCliente: id, idServ: x.s.ID_SERV, monto: x.monto, hasta: x.hasta, regularizar: x.reg } });
+    aviso(navigator.onLine ? 'Enviado: la cuenta se actualiza al sincronizar.' : 'Guardado: se enviará al volver la señal.');
+    location.hash = '#/cliente/' + id;
+  };
+}
+
 function vAjustar(id) {
   const c = D.porId[id];
   if (!c) { vista().innerHTML = '<p class="error">Cliente no encontrado.</p>'; return; }
@@ -3069,6 +3158,7 @@ function vAjustar(id) {
   const saldoTot = cargos.reduce((t, k) => t + Number(k.SALDO || 0), 0);
   vista().innerHTML = `<section class="form"><h2>Ajustar cuenta</h2>
     <p class="sub">${esc(c.NOMBRES)} · ${esc(id)} · debe ${soles(saldoTot)}</p>
+    <a class="btn secundario" href="#/deudaant/${esc(id)}">${ic('reloj')}Cliente antiguo: registrar deuda anterior</a>
     ${cargos.length ? `<h3>1. Meses</h3><div id="ajMeses"></div>
     <h3 class="tit-ic">2. Tipo de ajuste ${ayuda('¿Qué hace cada ajuste?', AJ_AYUDA)}</h3>
     <div class="tipos-aj" role="radiogroup" aria-label="Tipo de ajuste">${AJ_TIPOS_UI.map((x, i) => `<label><input type="radio" name="ajTipo" value="${x.v}" ${i ? '' : 'checked'}>${ic(x.icono)}${esc(x.t)}</label>`).join('')}</div>

@@ -50,6 +50,102 @@ export function aplicar(s) {
  * La verdad la sigue teniendo el servidor: si rechaza la operación (ej. otro técnico tomó ese
  * PPPoE antes), la siguiente descarga muestra el estado real. Las filas tocadas llevan _pend.
  */
+/**
+ * (1.32.0) CLIENTE NUEVO SIN SEÑAL: el alta crea en el celular un cliente PROVISIONAL (código NUEVO-<id del alta>)
+ * con sus servicios (…-S1 internet o único, …-S2 CATV) y sus cuotas (…-S1|aaaa-mm|CONCEPTO), calculadas como el
+ * servidor (prorrateo del primer mes, instalación, deuda anterior). Así se puede buscar, cobrar y editar al
+ * instante; al llegar al servidor esos códigos se cambian por los reales (Api.gs resolverProvisionales_).
+ */
+export const RX_NUEVO = /NUEVO-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-S([12]))?(?:\|(\d{4})-(\d{2})\|([A-Z ]+[A-Z]))?/g;
+export const esProvisional = (id) => /^NUEVO-/.test(String(id || ''));
+
+/** Códigos reales de las altas ya procesadas, sacados del mensaje del servidor: { idAlta: { idCliente, idServ, idCatv } } */
+export function altasProcesadas(ops) {
+  const m = {};
+  (ops || []).filter((o) => o.tipo === 'ALTA_CLIENTE' && o.estadoLocal === 'ok' && o.resultado).forEach((o) => {
+    const t = String(o.resultado.mensaje || ''), d = o.resultado.datos || {};
+    const idCliente = d.idCliente || (/Cliente (CLI-\d+)/.exec(t) || [])[1];
+    if (idCliente) m[o.idSolicitud] = { idCliente, idServ: d.idServ || (/servicio (SRV-\d+)/.exec(t) || [])[1] || '', idCatv: d.idCatv || (/CATV (SRV-\d+)/.exec(t) || [])[1] || '' };
+  });
+  return m;
+}
+
+/** Cambia los códigos provisionales de un texto por los reales (si el alta ya se procesó y ya están en D). */
+export function traducirProvisional(v) {
+  if (typeof v !== 'string' || v.indexOf('NUEVO-') < 0) return v;
+  return v.replace(RX_NUEVO, (todo, idA, s, a, m, conc) => {
+    const r = (D.altasOk || {})[idA];
+    if (!r) return todo;
+    if (!s) return r.idCliente;
+    const sv = s === '2' ? r.idCatv : r.idServ;
+    if (!a) return sv || todo;
+    const k = D.cargos.find((x) => x.ID_SERV === sv && String(x.PERIODO).slice(0, 7) === a + '-' + m && String(x.CONCEPTO) === conc);
+    return k ? k.ID_CARGO : todo;
+  });
+}
+
+function crearProvisional(o) {
+  const c = (o.datos && o.datos.cliente) || {}, sv = (o.datos && o.datos.servicio) || {};
+  const id = 'NUEVO-' + o.idSolicitud;
+  if (D.porId[id]) return;
+  const may = (x) => String(x || '').trim().toUpperCase();
+  const hoy = hoyISO(), mesHoy = hoy.slice(0, 7);
+  const fe = String(sv.fechaInicio || c.FECHA_ALTA || hoy).slice(0, 10);
+  const dia = Number(c.DIA_VENC) || Number(D.config.DiaVenc) || 4;
+  const gracia = Number(D.config.DiasGraciaAlta) || 0;
+  const masDias = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const venceAlta = masDias(fe, gracia), pad = (n) => String(n).padStart(2, '0');
+  const cli = { ID_CLIENTE: id, DNI_RUC: String(c.DNI_RUC || ''), NOMBRES: may(c.NOMBRES), TELEFONO: String(c.TELEFONO || ''), TELEFONO2: String(c.TELEFONO2 || ''),
+    DIRECCION: may(c.DIRECCION), REFERENCIA: String(c.REFERENCIA || ''), ZONA: may(c.ZONA), COORDENADAS: String(c.COORDENADAS || ''), FECHA_ALTA: fe,
+    DIA_VENC: dia, OBSERVACIONES: String(c.OBSERVACIONES || ''), _pend: true, _nuevo: true };
+  D.clientes.push(cli); D.porId[id] = cli;
+  const servs = [];
+  const nuevoServ = (n, plan, tarifa, pppoe) => {
+    const s = { ID_SERV: id + '-S' + n, ID_CLIENTE: id, CLIENTE: cli.NOMBRES, ZONA: cli.ZONA, PLAN: plan, MODO: sv.modo || '', TARIFA: Number(tarifa) || 0,
+      FECHA_INICIO: fe, ESTADO: 'Activo', PPPOE: pppoe || '', OBS: n === 2 ? 'Paquete DUO' : '', _pend: true };
+    D.servicios.push(s); servs.push(s); return s;
+  };
+  if (!sv.plan) return;
+  const s1 = nuevoServ(1, sv.plan, sv.tarifa, sv.pppoe);
+  const s2 = sv.catv && Number(sv.catv.tarifa) > 0 ? nuevoServ(2, 'SERVICIO DE CATV', sv.catv.tarifa, '') : null;
+  const cargo = (s, per, conc, monto, vence, obs) => D.cargos.push({ ID_CARGO: `${s.ID_SERV}|${per}|${conc}`, ID_SERV: s.ID_SERV, ID_CLIENTE: id, CLIENTE: cli.NOMBRES,
+    PERIODO: per + '-01', CONCEPTO: conc, MONTO: r2(monto), PAGADO: 0, SALDO: r2(monto), VENCE: vence, ESTADO: vence < hoy ? 'Vencido' : 'Pendiente', ANULADO: 'No', PLAN: s.PLAN, OBS: obs || '', _pend: true });
+  const anioFin = Math.max(Number(fe.slice(0, 4)), Number(hoy.slice(0, 4)));
+  const prorr = D.config.ProrratearAlta !== 'No' && Number(fe.slice(8, 10)) > 1;
+  [[s1, sv.montoPrimerMes], [s2, sv.catv && sv.catv.montoPrimerMes]].forEach(([s, manual]) => {
+    if (!s) return;
+    let [a, m] = fe.slice(0, 7).split('-').map(Number);
+    const primero = manual !== undefined && manual !== null && manual !== '' ? Number(manual) : prorr ? prorrateoPlan(0, s.TARIFA, fe).conNueva : s.TARIFA;
+    for (let i = 0; a < anioFin || (a === anioFin && m <= 12); i++) {
+      const per = a + '-' + pad(m);
+      cargo(s, per, 'MENSUALIDAD', i ? s.TARIFA : primero, i ? `${per}-${pad(dia)}` : venceAlta, i ? 'Alta' : 'Alta (sin enviar)');
+      m++; if (m > 12) { m = 1; a++; }
+    }
+  });
+  const inst = Array.isArray(sv.instalacion) ? sv.instalacion.filter((x) => x && Number(x.monto) > 0) : [];
+  const montoInst = inst.length ? inst.reduce((t, x) => t + Number(x.monto), 0) : Number(sv.montoInstalacion || 0);
+  if (montoInst > 0) cargo(s1, fe.slice(0, 7), 'INSTALACION', montoInst, venceAlta,
+    inst.length ? 'Instalación: ' + inst.map((x) => String(x.concepto || 'Otro').slice(0, 40) + ' ' + soles(x.monto)).join(' · ') : 'Instalación');
+  if (sv.deudaAnterior && Number(sv.deudaAnterior.monto) > 0 && /^\d{4}-\d{2}$/.test(sv.deudaAnterior.hasta))
+    cargo(s1, sv.deudaAnterior.hasta, 'DEUDA ANTERIOR', Number(sv.deudaAnterior.monto), `${sv.deudaAnterior.hasta}-${pad(dia)}`, '[AJUSTE] Deuda anterior');
+  D.resumen[id] = { ID_CLIENTE: id, ESTADO: 'Activo', ALERTA: '', _pend: true };
+  recalcularResumenLocal(id);
+}
+
+/** Deuda, meses y estado de un cliente calculados con sus cuotas del celular (cliente provisional o tras un cobro). */
+export function recalcularResumenLocal(id) {
+  const r = D.resumen[id]; if (!r) return;
+  const hoy = hoyISO(), mes = hoy.slice(0, 7);
+  const ks = D.cargos.filter((k) => k.ID_CLIENTE === id && k.ANULADO !== 'Sí' && Number(k.SALDO) > 0.004);
+  const venc = ks.filter((k) => String(k.VENCE || '').slice(0, 10) < hoy);
+  r.DEUDA_TOTAL = r2(ks.filter((k) => String(k.PERIODO).slice(0, 7) <= mes).reduce((t, k) => t + Number(k.SALDO), 0));
+  r.DEUDA_VENCIDA = r2(venc.reduce((t, k) => t + Number(k.SALDO), 0));
+  r.MESES_ADEUDA = new Set(venc.map((k) => String(k.PERIODO).slice(0, 7))).size;
+  const primero = venc.map((k) => String(k.VENCE).slice(0, 10)).sort()[0];
+  r.DIAS_ATRASO = primero ? Math.round((Date.parse(hoy) - Date.parse(primero)) / 864e5) : 0;
+  if (r.ESTADO === 'Activo' || r.ESTADO === 'Moroso') r.ESTADO = r.DEUDA_VENCIDA > 0 ? 'Moroso' : 'Activo';
+}
+
 export function aplicarPendientes(ops) {
   const pp = (cod) => D.pppoe.find((x) => String(x.CODIGO) === String(cod));
   const serv = (id) => D.servicios.find((x) => x.ID_SERV === id);
@@ -59,6 +155,9 @@ export function aplicarPendientes(ops) {
     const s = idServ && serv(idServ); if (s) { s.PPPOE = cod; s._pend = true; }
   };
   (ops || []).slice().sort((a, b) => String(a.fDispositivo).localeCompare(String(b.fDispositivo))).forEach((o) => {
+    if (JSON.stringify(o).indexOf('NUEVO-') >= 0 && Object.keys(D.altasOk || {}).length) {
+      o = Object.assign({}, o, { idCliente: traducirProvisional(o.idCliente), idServ: traducirProvisional(o.idServ), cargos: (o.cargos || []).map(traducirProvisional) });
+    }
     const cli = (o.idCliente && D.porId[o.idCliente]) || {};
     switch (o.tipo) {
       case 'ASIGNAR_PPPOE': case 'NUEVO_SERVICIO':
@@ -67,7 +166,8 @@ export function aplicarPendientes(ops) {
         if (o.codigoPPPoE) tomar(o.codigoPPPoE, o.idCliente, cli.NOMBRES, o.idServ); break;
       case 'ALTA_CLIENTE': {
         const sv = (o.datos && o.datos.servicio) || {}, c = (o.datos && o.datos.cliente) || {};
-        if (sv.pppoe) tomar(sv.pppoe, '', c.nombres || c.NOMBRES, null); break;
+        if (o.estadoLocal !== 'ok' && o.estadoLocal !== 'rechazado') crearProvisional(o);   // (1.32.0) existe ya en el celular
+        if (sv.pppoe) tomar(sv.pppoe, 'NUEVO-' + o.idSolicitud, c.nombres || c.NOMBRES, 'NUEVO-' + o.idSolicitud + '-S1'); break;
       }
       case 'LIBERAR_PPPOE': {
         const p = pp(o.codigoPPPoE); if (!p) break;
@@ -81,8 +181,16 @@ export function aplicarPendientes(ops) {
         const p = pp(o.codigoPPPoE); if (p && o.datos && o.datos.titular) Object.assign(p, { TITULAR: String(o.datos.titular).toUpperCase(), _pend: true }); break;
       }
       case 'EDITAR_CLIENTE': {                        // el celular corregido se ve al instante
-        if (o.idCliente && D.porId[o.idCliente] && o.datos) ['TELEFONO', 'TELEFONO2'].forEach((k) => { if (o.datos[k] !== undefined) D.porId[o.idCliente][k] = o.datos[k]; });
+        // (1.32.0) todos los datos editados se ven al instante (también en un cliente nuevo sin enviar)
+        const may = ['NOMBRES', 'DIRECCION', 'ZONA'];
+        if (o.idCliente && D.porId[o.idCliente] && o.datos) ['DNI_RUC', 'NOMBRES', 'TELEFONO', 'TELEFONO2', 'DIRECCION', 'REFERENCIA', 'ZONA', 'COORDENADAS', 'DIA_VENC', 'OBSERVACIONES']
+          .forEach((k) => { if (o.datos[k] !== undefined) { D.porId[o.idCliente][k] = may.includes(k) ? String(o.datos[k]).trim().toUpperCase() : o.datos[k]; D.porId[o.idCliente]._pend = true; } });
         break;
+      }
+      case 'EDITAR_SERVICIO': {
+        const s = serv(o.idServ); if (!s) break;
+        if (o.plan) s.PLAN = o.plan; if (o.modo) s.MODO = o.modo; if (o.datos && o.datos.obs !== undefined) s.OBS = o.datos.obs;
+        s._pend = true; break;
       }
       case 'REGISTRAR_AVISO': {                       // el aviso recién marcado cuenta al instante (lista y reporte)
         const d = o.datos || {};

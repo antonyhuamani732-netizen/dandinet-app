@@ -6,7 +6,7 @@ import { CONFIG } from './config.js';
 import { llamar } from './api.js';
 import { sesionVigente, guardarSesion } from './auth.js';
 import { kvGet, kvSet, kvDel, kvClaves, colaPut, colaTodos, colaVaciar, colaBorrar } from './db.js';
-import { aplicar, aplicarPendientes, ahoraISO } from './datos.js';
+import { D, aplicar, aplicarPendientes, ahoraISO, altasProcesadas } from './datos.js';
 
 let _enCurso = null;
 let _parcial = null;
@@ -34,7 +34,9 @@ export async function encolar(op) {
 export async function reaplicarPendientes() {
   // los avisos de WhatsApp ya enviados también: si Android cerró la app entre el envío y la descarga, el
   // cliente no debe volver a aparecer como "por avisar" (aplicarPendientes no duplica: compara ID_SOLICITUD)
-  const avisos = (await colaTodos()).filter((o) => o.estadoLocal === 'ok' && o.tipo === 'REGISTRAR_AVISO');
+  const todas = await colaTodos();
+  D.altasOk = altasProcesadas(todas);     // (1.32.0) códigos reales de los clientes que se crearon sin señal
+  const avisos = todas.filter((o) => o.estadoLocal === 'ok' && o.tipo === 'REGISTRAR_AVISO');
   aplicarPendientes((await pendientesDeEnvio()).concat(avisos));
 }
 
