@@ -126,10 +126,23 @@ function crearProvisional(o) {
   const montoInst = inst.length ? inst.reduce((t, x) => t + Number(x.monto), 0) : Number(sv.montoInstalacion || 0);
   if (montoInst > 0) cargo(s1, fe.slice(0, 7), 'INSTALACION', montoInst, venceAlta,
     inst.length ? 'Instalación: ' + inst.map((x) => String(x.concepto || 'Otro').slice(0, 40) + ' ' + soles(x.monto)).join(' · ') : 'Instalación');
-  if (sv.deudaAnterior && Number(sv.deudaAnterior.monto) > 0 && /^\d{4}-\d{2}$/.test(sv.deudaAnterior.hasta))
-    cargo(s1, sv.deudaAnterior.hasta, 'DEUDA ANTERIOR', Number(sv.deudaAnterior.monto), `${sv.deudaAnterior.hasta}-${pad(dia)}`, '[AJUSTE] Deuda anterior');
+  if (sv.deudaAnterior && Number(sv.deudaAnterior.monto) > 0 && /^\d{4}-\d{2}$/.test(sv.deudaAnterior.hasta)) {
+    if (sv.deudaAnterior.porMeses) {               // (1.33.0) hacia atrás a la tarifa; el mes más antiguo lleva el resto
+      repartoMeses(sv.deudaAnterior.monto, s1.TARIFA, sv.deudaAnterior.hasta).forEach((x) => cargo(s1, x.per, 'MENSUALIDAD', x.m, `${x.per}-${pad(dia)}`, '[AJUSTE] Deuda anterior'));
+    } else cargo(s1, sv.deudaAnterior.hasta, 'DEUDA ANTERIOR', Number(sv.deudaAnterior.monto), `${sv.deudaAnterior.hasta}-${pad(dia)}`, '[AJUSTE] Deuda anterior');
+  }
   D.resumen[id] = { ID_CLIENTE: id, ESTADO: 'Activo', ALERTA: '', _pend: true };
   recalcularResumenLocal(id);
+}
+
+/** (1.33.0) Reparto de una deuda en meses hacia atrás desde `hasta` (aaaa-mm): [{ per, m }], del más reciente al más antiguo. */
+export function repartoMeses(monto, tarifa, hasta) {
+  const t = r2(tarifa), n = t > 0 ? Math.floor((Number(monto) + 0.004) / t) : 0, resto = r2(Number(monto) - n * t), r = [];
+  let [a, m] = String(hasta).split('-').map(Number);
+  const atras = () => { const per = a + '-' + String(m).padStart(2, '0'); m--; if (m < 1) { m = 12; a--; } return per; };
+  for (let i = 0; i < n; i++) r.push({ per: atras(), m: t });
+  if (resto >= 0.005) r.push({ per: atras(), m: resto });
+  return r;
 }
 
 /** Deuda, meses y estado de un cliente calculados con sus cuotas del celular (cliente provisional o tras un cobro). */
@@ -185,6 +198,10 @@ export function aplicarPendientes(ops) {
         const may = ['NOMBRES', 'DIRECCION', 'ZONA'];
         if (o.idCliente && D.porId[o.idCliente] && o.datos) ['DNI_RUC', 'NOMBRES', 'TELEFONO', 'TELEFONO2', 'DIRECCION', 'REFERENCIA', 'ZONA', 'COORDENADAS', 'DIA_VENC', 'OBSERVACIONES']
           .forEach((k) => { if (o.datos[k] !== undefined) { D.porId[o.idCliente][k] = may.includes(k) ? String(o.datos[k]).trim().toUpperCase() : o.datos[k]; D.porId[o.idCliente]._pend = true; } });
+        break;
+      }
+      case 'QUITAR_SERVICIO_DUPLICADO': {             // (1.33.0) el servicio duplicado desaparece de la ficha al instante
+        const s = serv(o.idServ); if (s && !/^\[DUPLICADO\]/.test(String(s.OBS || ''))) { s.OBS = '[DUPLICADO] ' + (o.motivo || ''); s._pend = true; }
         break;
       }
       case 'EDITAR_SERVICIO': {
@@ -296,7 +313,8 @@ export function buscarClientes(texto, max = 80, filtro = null) {
   return out;
 }
 
-export const serviciosDe = (id) => D.servicios.filter((s) => s.ID_CLIENTE === id);
+export const esDuplicado = (s) => /^\[DUPLICADO\]/.test(String((s && s.OBS) || ''));
+export const serviciosDe = (id) => D.servicios.filter((s) => s.ID_CLIENTE === id && !esDuplicado(s));   // (1.33.0) sin los marcados [DUPLICADO]
 
 /**
  * Nombre del servicio sin la velocidad: "SERVICIO DE INTERNET 20mbp" → "SERVICIO DE INTERNET".
